@@ -107,7 +107,7 @@ jobs:
           flyctl deploy \
             --app bx-partner-portal \
             --config apps/partner-portal/fly.toml \
-            --build-arg NEXT_PUBLIC_API_URL=https://bx-gateway.fly.dev \
+            --build-arg NEXT_PUBLIC_API_URL=${{ vars.GATEWAY_URL || 'https://bx-gateway.fly.dev' }} \
             --remote-only \
             --wait-timeout 300
 
