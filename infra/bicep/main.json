@@ -1,0 +1,1372 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "metadata": {
+    "_generator": {
+      "name": "bicep",
+      "version": "0.37.4.10188",
+      "templateHash": "8152879628400781667"
+    }
+  },
+  "parameters": {
+    "location": {
+      "type": "string",
+      "defaultValue": "swedencentral",
+      "metadata": {
+        "description": "Azure region for all resources"
+      }
+    },
+    "environment": {
+      "type": "string",
+      "defaultValue": "prod",
+      "metadata": {
+        "description": "Environment tag: dev | staging | prod"
+      }
+    },
+    "prefix": {
+      "type": "string",
+      "defaultValue": "bx",
+      "metadata": {
+        "description": "Short prefix for resource names"
+      }
+    },
+    "postgresAdminPassword": {
+      "type": "securestring",
+      "metadata": {
+        "description": "PostgreSQL admin password"
+      }
+    },
+    "jwtSecret": {
+      "type": "securestring",
+      "metadata": {
+        "description": "JWT signing secret"
+      }
+    },
+    "webhookSecret": {
+      "type": "securestring",
+      "metadata": {
+        "description": "Webhook HMAC secret"
+      }
+    },
+    "azureOpenAiApiKey": {
+      "type": "securestring",
+      "metadata": {
+        "description": "Azure OpenAI API key"
+      }
+    },
+    "azureOpenAiEndpoint": {
+      "type": "string",
+      "metadata": {
+        "description": "Azure OpenAI endpoint (e.g. https://my-aoai.openai.azure.com/)"
+      }
+    },
+    "azureOpenAiDeployment": {
+      "type": "string",
+      "defaultValue": "gpt-4o-mini",
+      "metadata": {
+        "description": "Azure OpenAI deployment name"
+      }
+    },
+    "azureOpenAiApiVersion": {
+      "type": "string",
+      "defaultValue": "2024-08-01-preview",
+      "metadata": {
+        "description": "Azure OpenAI API version"
+      }
+    },
+    "adminEmail": {
+      "type": "string",
+      "defaultValue": "admin@businessexchange.io",
+      "metadata": {
+        "description": "Admin portal login email"
+      }
+    },
+    "adminPassword": {
+      "type": "securestring",
+      "metadata": {
+        "description": "Admin portal login password"
+      }
+    },
+    "corsOrigin": {
+      "type": "string",
+      "defaultValue": "*",
+      "metadata": {
+        "description": "CORS allowed origin for the gateway (e.g. https://portal.yourdomain.com)"
+      }
+    }
+  },
+  "variables": {
+    "tags": {
+      "environment": "[parameters('environment')]",
+      "project": "business-exchange",
+      "managedBy": "bicep"
+    },
+    "postgresServerName": "[format('{0}-postgres-{1}', parameters('prefix'), parameters('environment'))]",
+    "postgresAdminUser": "bx_admin",
+    "postgresDbName": "business_exchange",
+    "redisName": "[format('{0}-redis-{1}', parameters('prefix'), parameters('environment'))]",
+    "acrName": "[replace(format('{0}acr{1}', parameters('prefix'), parameters('environment')), '-', '')]",
+    "envName": "[format('{0}-env-{1}', parameters('prefix'), parameters('environment'))]",
+    "logName": "[format('{0}-logs-{1}', parameters('prefix'), parameters('environment'))]"
+  },
+  "resources": [
+    {
+      "type": "Microsoft.OperationalInsights/workspaces",
+      "apiVersion": "2022-10-01",
+      "name": "[variables('logName')]",
+      "location": "[parameters('location')]",
+      "tags": "[variables('tags')]",
+      "properties": {
+        "sku": {
+          "name": "PerGB2018"
+        },
+        "retentionInDays": 30
+      }
+    },
+    {
+      "type": "Microsoft.Resources/deployments",
+      "apiVersion": "2022-09-01",
+      "name": "acr",
+      "properties": {
+        "expressionEvaluationOptions": {
+          "scope": "inner"
+        },
+        "mode": "Incremental",
+        "parameters": {
+          "acrName": {
+            "value": "[variables('acrName')]"
+          },
+          "location": {
+            "value": "[parameters('location')]"
+          },
+          "tags": {
+            "value": "[variables('tags')]"
+          }
+        },
+        "template": {
+          "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+          "contentVersion": "1.0.0.0",
+          "metadata": {
+            "_generator": {
+              "name": "bicep",
+              "version": "0.37.4.10188",
+              "templateHash": "11617407143617024265"
+            }
+          },
+          "parameters": {
+            "acrName": {
+              "type": "string"
+            },
+            "location": {
+              "type": "string"
+            },
+            "tags": {
+              "type": "object"
+            }
+          },
+          "resources": [
+            {
+              "type": "Microsoft.ContainerRegistry/registries",
+              "apiVersion": "2023-07-01",
+              "name": "[parameters('acrName')]",
+              "location": "[parameters('location')]",
+              "tags": "[parameters('tags')]",
+              "sku": {
+                "name": "Basic"
+              },
+              "properties": {
+                "adminUserEnabled": true
+              }
+            }
+          ],
+          "outputs": {
+            "loginServer": {
+              "type": "string",
+              "value": "[reference(resourceId('Microsoft.ContainerRegistry/registries', parameters('acrName')), '2023-07-01').loginServer]"
+            },
+            "acrId": {
+              "type": "string",
+              "value": "[resourceId('Microsoft.ContainerRegistry/registries', parameters('acrName'))]"
+            }
+          }
+        }
+      }
+    },
+    {
+      "type": "Microsoft.Resources/deployments",
+      "apiVersion": "2022-09-01",
+      "name": "postgres",
+      "properties": {
+        "expressionEvaluationOptions": {
+          "scope": "inner"
+        },
+        "mode": "Incremental",
+        "parameters": {
+          "serverName": {
+            "value": "[variables('postgresServerName')]"
+          },
+          "location": {
+            "value": "[parameters('location')]"
+          },
+          "tags": {
+            "value": "[variables('tags')]"
+          },
+          "adminUser": {
+            "value": "[variables('postgresAdminUser')]"
+          },
+          "adminPassword": {
+            "value": "[parameters('postgresAdminPassword')]"
+          },
+          "dbName": {
+            "value": "[variables('postgresDbName')]"
+          }
+        },
+        "template": {
+          "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+          "contentVersion": "1.0.0.0",
+          "metadata": {
+            "_generator": {
+              "name": "bicep",
+              "version": "0.37.4.10188",
+              "templateHash": "1326952953201149156"
+            }
+          },
+          "parameters": {
+            "serverName": {
+              "type": "string"
+            },
+            "location": {
+              "type": "string"
+            },
+            "tags": {
+              "type": "object"
+            },
+            "adminUser": {
+              "type": "string"
+            },
+            "adminPassword": {
+              "type": "securestring"
+            },
+            "dbName": {
+              "type": "string"
+            }
+          },
+          "resources": [
+            {
+              "type": "Microsoft.DBforPostgreSQL/flexibleServers",
+              "apiVersion": "2023-06-01-preview",
+              "name": "[parameters('serverName')]",
+              "location": "[parameters('location')]",
+              "tags": "[parameters('tags')]",
+              "sku": {
+                "name": "Standard_B1ms",
+                "tier": "Burstable"
+              },
+              "properties": {
+                "administratorLogin": "[parameters('adminUser')]",
+                "administratorLoginPassword": "[parameters('adminPassword')]",
+                "version": "16",
+                "storage": {
+                  "storageSizeGB": 32
+                },
+                "backup": {
+                  "backupRetentionDays": 7,
+                  "geoRedundantBackup": "Disabled"
+                },
+                "highAvailability": {
+                  "mode": "Disabled"
+                },
+                "authConfig": {
+                  "activeDirectoryAuth": "Disabled",
+                  "passwordAuth": "Enabled"
+                }
+              }
+            },
+            {
+              "type": "Microsoft.DBforPostgreSQL/flexibleServers/firewallRules",
+              "apiVersion": "2023-06-01-preview",
+              "name": "[format('{0}/{1}', parameters('serverName'), 'AllowAzureServices')]",
+              "properties": {
+                "startIpAddress": "0.0.0.0",
+                "endIpAddress": "0.0.0.0"
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.DBforPostgreSQL/flexibleServers', parameters('serverName'))]"
+              ]
+            },
+            {
+              "type": "Microsoft.DBforPostgreSQL/flexibleServers/databases",
+              "apiVersion": "2023-06-01-preview",
+              "name": "[format('{0}/{1}', parameters('serverName'), parameters('dbName'))]",
+              "properties": {
+                "charset": "UTF8",
+                "collation": "en_US.utf8"
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.DBforPostgreSQL/flexibleServers', parameters('serverName'))]"
+              ]
+            }
+          ],
+          "outputs": {
+            "fqdn": {
+              "type": "string",
+              "value": "[reference(resourceId('Microsoft.DBforPostgreSQL/flexibleServers', parameters('serverName')), '2023-06-01-preview').fullyQualifiedDomainName]"
+            },
+            "serverId": {
+              "type": "string",
+              "value": "[resourceId('Microsoft.DBforPostgreSQL/flexibleServers', parameters('serverName'))]"
+            }
+          }
+        }
+      }
+    },
+    {
+      "type": "Microsoft.Resources/deployments",
+      "apiVersion": "2022-09-01",
+      "name": "redis",
+      "properties": {
+        "expressionEvaluationOptions": {
+          "scope": "inner"
+        },
+        "mode": "Incremental",
+        "parameters": {
+          "redisName": {
+            "value": "[variables('redisName')]"
+          },
+          "location": {
+            "value": "[parameters('location')]"
+          },
+          "tags": {
+            "value": "[variables('tags')]"
+          }
+        },
+        "template": {
+          "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+          "contentVersion": "1.0.0.0",
+          "metadata": {
+            "_generator": {
+              "name": "bicep",
+              "version": "0.37.4.10188",
+              "templateHash": "9524964325321052795"
+            }
+          },
+          "parameters": {
+            "redisName": {
+              "type": "string"
+            },
+            "location": {
+              "type": "string"
+            },
+            "tags": {
+              "type": "object"
+            }
+          },
+          "resources": [
+            {
+              "type": "Microsoft.Cache/redis",
+              "apiVersion": "2023-08-01",
+              "name": "[parameters('redisName')]",
+              "location": "[parameters('location')]",
+              "tags": "[parameters('tags')]",
+              "properties": {
+                "sku": {
+                  "name": "Basic",
+                  "family": "C",
+                  "capacity": 0
+                },
+                "enableNonSslPort": false,
+                "minimumTlsVersion": "1.2"
+              }
+            }
+          ],
+          "outputs": {
+            "hostName": {
+              "type": "string",
+              "value": "[reference(resourceId('Microsoft.Cache/redis', parameters('redisName')), '2023-08-01').hostName]"
+            },
+            "primaryKey": {
+              "type": "string",
+              "value": "[listKeys(resourceId('Microsoft.Cache/redis', parameters('redisName')), '2023-08-01').primaryKey]"
+            },
+            "redisId": {
+              "type": "string",
+              "value": "[resourceId('Microsoft.Cache/redis', parameters('redisName'))]"
+            }
+          }
+        }
+      }
+    },
+    {
+      "type": "Microsoft.Resources/deployments",
+      "apiVersion": "2022-09-01",
+      "name": "containerenv",
+      "properties": {
+        "expressionEvaluationOptions": {
+          "scope": "inner"
+        },
+        "mode": "Incremental",
+        "parameters": {
+          "envName": {
+            "value": "[variables('envName')]"
+          },
+          "location": {
+            "value": "[parameters('location')]"
+          },
+          "tags": {
+            "value": "[variables('tags')]"
+          },
+          "logAnalyticsCustomerId": {
+            "value": "[reference(resourceId('Microsoft.OperationalInsights/workspaces', variables('logName')), '2022-10-01').customerId]"
+          },
+          "logAnalyticsSharedKey": {
+            "value": "[listKeys(resourceId('Microsoft.OperationalInsights/workspaces', variables('logName')), '2022-10-01').primarySharedKey]"
+          }
+        },
+        "template": {
+          "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+          "contentVersion": "1.0.0.0",
+          "metadata": {
+            "_generator": {
+              "name": "bicep",
+              "version": "0.37.4.10188",
+              "templateHash": "12520050022293272338"
+            }
+          },
+          "parameters": {
+            "envName": {
+              "type": "string"
+            },
+            "location": {
+              "type": "string"
+            },
+            "tags": {
+              "type": "object"
+            },
+            "logAnalyticsCustomerId": {
+              "type": "string"
+            },
+            "logAnalyticsSharedKey": {
+              "type": "securestring"
+            }
+          },
+          "resources": [
+            {
+              "type": "Microsoft.App/managedEnvironments",
+              "apiVersion": "2023-11-02-preview",
+              "name": "[parameters('envName')]",
+              "location": "[parameters('location')]",
+              "tags": "[parameters('tags')]",
+              "properties": {
+                "appLogsConfiguration": {
+                  "destination": "log-analytics",
+                  "logAnalyticsConfiguration": {
+                    "customerId": "[parameters('logAnalyticsCustomerId')]",
+                    "sharedKey": "[parameters('logAnalyticsSharedKey')]"
+                  }
+                }
+              }
+            }
+          ],
+          "outputs": {
+            "envId": {
+              "type": "string",
+              "value": "[resourceId('Microsoft.App/managedEnvironments', parameters('envName'))]"
+            },
+            "envName": {
+              "type": "string",
+              "value": "[parameters('envName')]"
+            }
+          }
+        }
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.OperationalInsights/workspaces', variables('logName'))]"
+      ]
+    },
+    {
+      "type": "Microsoft.Resources/deployments",
+      "apiVersion": "2022-09-01",
+      "name": "services",
+      "properties": {
+        "expressionEvaluationOptions": {
+          "scope": "inner"
+        },
+        "mode": "Incremental",
+        "parameters": {
+          "location": {
+            "value": "[parameters('location')]"
+          },
+          "tags": {
+            "value": "[variables('tags')]"
+          },
+          "envId": {
+            "value": "[reference(resourceId('Microsoft.Resources/deployments', 'containerenv'), '2022-09-01').outputs.envId.value]"
+          },
+          "acrLoginServer": {
+            "value": "[reference(resourceId('Microsoft.Resources/deployments', 'acr'), '2022-09-01').outputs.loginServer.value]"
+          },
+          "acrName": {
+            "value": "[variables('acrName')]"
+          },
+          "postgresUrl": {
+            "value": "[format('postgresql://{0}:{1}@{2}:5432/{3}?sslmode=require', variables('postgresAdminUser'), parameters('postgresAdminPassword'), reference(resourceId('Microsoft.Resources/deployments', 'postgres'), '2022-09-01').outputs.fqdn.value, variables('postgresDbName'))]"
+          },
+          "redisUrl": {
+            "value": "[format('rediss://:{0}@{1}:6380', reference(resourceId('Microsoft.Resources/deployments', 'redis'), '2022-09-01').outputs.primaryKey.value, reference(resourceId('Microsoft.Resources/deployments', 'redis'), '2022-09-01').outputs.hostName.value)]"
+          },
+          "jwtSecret": {
+            "value": "[parameters('jwtSecret')]"
+          },
+          "webhookSecret": {
+            "value": "[parameters('webhookSecret')]"
+          },
+          "azureOpenAiApiKey": {
+            "value": "[parameters('azureOpenAiApiKey')]"
+          },
+          "azureOpenAiEndpoint": {
+            "value": "[parameters('azureOpenAiEndpoint')]"
+          },
+          "azureOpenAiDeployment": {
+            "value": "[parameters('azureOpenAiDeployment')]"
+          },
+          "azureOpenAiApiVersion": {
+            "value": "[parameters('azureOpenAiApiVersion')]"
+          },
+          "adminEmail": {
+            "value": "[parameters('adminEmail')]"
+          },
+          "adminPassword": {
+            "value": "[parameters('adminPassword')]"
+          },
+          "corsOrigin": {
+            "value": "[parameters('corsOrigin')]"
+          }
+        },
+        "template": {
+          "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+          "contentVersion": "1.0.0.0",
+          "metadata": {
+            "_generator": {
+              "name": "bicep",
+              "version": "0.37.4.10188",
+              "templateHash": "9021908387977030050"
+            }
+          },
+          "parameters": {
+            "location": {
+              "type": "string"
+            },
+            "tags": {
+              "type": "object"
+            },
+            "envId": {
+              "type": "string"
+            },
+            "acrLoginServer": {
+              "type": "string"
+            },
+            "acrName": {
+              "type": "string"
+            },
+            "postgresUrl": {
+              "type": "securestring"
+            },
+            "redisUrl": {
+              "type": "securestring"
+            },
+            "jwtSecret": {
+              "type": "securestring"
+            },
+            "webhookSecret": {
+              "type": "securestring"
+            },
+            "azureOpenAiApiKey": {
+              "type": "securestring"
+            },
+            "azureOpenAiEndpoint": {
+              "type": "string"
+            },
+            "azureOpenAiDeployment": {
+              "type": "string"
+            },
+            "azureOpenAiApiVersion": {
+              "type": "string"
+            },
+            "adminEmail": {
+              "type": "string"
+            },
+            "adminPassword": {
+              "type": "securestring"
+            },
+            "corsOrigin": {
+              "type": "string"
+            }
+          },
+          "variables": {
+            "authUrl": "http://auth-service",
+            "partnerUrl": "http://partner-service",
+            "subscriptionUrl": "http://subscription-service",
+            "integrationUrl": "http://integration-service",
+            "mappingUrl": "http://mapping-engine",
+            "agentUrl": "http://agent-orchestrator",
+            "billingUrl": "http://billing-service"
+          },
+          "resources": [
+            {
+              "type": "Microsoft.App/containerApps",
+              "apiVersion": "2023-11-02-preview",
+              "name": "auth-service",
+              "location": "[parameters('location')]",
+              "tags": "[parameters('tags')]",
+              "properties": {
+                "environmentId": "[parameters('envId')]",
+                "configuration": {
+                  "ingress": {
+                    "external": false,
+                    "targetPort": 3001,
+                    "transport": "http"
+                  },
+                  "registries": [
+                    {
+                      "server": "[parameters('acrLoginServer')]",
+                      "username": "[listCredentials(resourceId('Microsoft.ContainerRegistry/registries', parameters('acrName')), '2023-07-01').username]",
+                      "passwordSecretRef": "acr-password"
+                    }
+                  ],
+                  "secrets": [
+                    {
+                      "name": "acr-password",
+                      "value": "[listCredentials(resourceId('Microsoft.ContainerRegistry/registries', parameters('acrName')), '2023-07-01').passwords[0].value]"
+                    },
+                    {
+                      "name": "postgres-url",
+                      "value": "[parameters('postgresUrl')]"
+                    },
+                    {
+                      "name": "redis-url",
+                      "value": "[parameters('redisUrl')]"
+                    },
+                    {
+                      "name": "jwt-secret",
+                      "value": "[parameters('jwtSecret')]"
+                    },
+                    {
+                      "name": "admin-password",
+                      "value": "[parameters('adminPassword')]"
+                    }
+                  ]
+                },
+                "template": {
+                  "containers": [
+                    {
+                      "name": "auth-service",
+                      "image": "[format('{0}/auth-service:latest', parameters('acrLoginServer'))]",
+                      "resources": {
+                        "cpu": "[json('0.25')]",
+                        "memory": "0.5Gi"
+                      },
+                      "env": [
+                        {
+                          "name": "PORT",
+                          "value": "3001"
+                        },
+                        {
+                          "name": "DATABASE_URL",
+                          "secretRef": "postgres-url"
+                        },
+                        {
+                          "name": "REDIS_URL",
+                          "secretRef": "redis-url"
+                        },
+                        {
+                          "name": "JWT_SECRET",
+                          "secretRef": "jwt-secret"
+                        },
+                        {
+                          "name": "JWT_EXPIRES_IN",
+                          "value": "1h"
+                        },
+                        {
+                          "name": "REFRESH_EXPIRES_IN",
+                          "value": "7 days"
+                        },
+                        {
+                          "name": "ADMIN_EMAIL",
+                          "value": "[parameters('adminEmail')]"
+                        },
+                        {
+                          "name": "ADMIN_PASSWORD",
+                          "secretRef": "admin-password"
+                        }
+                      ]
+                    }
+                  ],
+                  "scale": {
+                    "minReplicas": 1,
+                    "maxReplicas": 3
+                  }
+                }
+              }
+            },
+            {
+              "type": "Microsoft.App/containerApps",
+              "apiVersion": "2023-11-02-preview",
+              "name": "partner-service",
+              "location": "[parameters('location')]",
+              "tags": "[parameters('tags')]",
+              "properties": {
+                "environmentId": "[parameters('envId')]",
+                "configuration": {
+                  "ingress": {
+                    "external": false,
+                    "targetPort": 3002,
+                    "transport": "http"
+                  },
+                  "registries": [
+                    {
+                      "server": "[parameters('acrLoginServer')]",
+                      "username": "[listCredentials(resourceId('Microsoft.ContainerRegistry/registries', parameters('acrName')), '2023-07-01').username]",
+                      "passwordSecretRef": "acr-password"
+                    }
+                  ],
+                  "secrets": [
+                    {
+                      "name": "acr-password",
+                      "value": "[listCredentials(resourceId('Microsoft.ContainerRegistry/registries', parameters('acrName')), '2023-07-01').passwords[0].value]"
+                    },
+                    {
+                      "name": "postgres-url",
+                      "value": "[parameters('postgresUrl')]"
+                    },
+                    {
+                      "name": "redis-url",
+                      "value": "[parameters('redisUrl')]"
+                    }
+                  ]
+                },
+                "template": {
+                  "containers": [
+                    {
+                      "name": "partner-service",
+                      "image": "[format('{0}/partner-service:latest', parameters('acrLoginServer'))]",
+                      "resources": {
+                        "cpu": "[json('0.25')]",
+                        "memory": "0.5Gi"
+                      },
+                      "env": [
+                        {
+                          "name": "PORT",
+                          "value": "3002"
+                        },
+                        {
+                          "name": "DATABASE_URL",
+                          "secretRef": "postgres-url"
+                        },
+                        {
+                          "name": "REDIS_URL",
+                          "secretRef": "redis-url"
+                        }
+                      ]
+                    }
+                  ],
+                  "scale": {
+                    "minReplicas": 1,
+                    "maxReplicas": 3
+                  }
+                }
+              }
+            },
+            {
+              "type": "Microsoft.App/containerApps",
+              "apiVersion": "2023-11-02-preview",
+              "name": "subscription-service",
+              "location": "[parameters('location')]",
+              "tags": "[parameters('tags')]",
+              "properties": {
+                "environmentId": "[parameters('envId')]",
+                "configuration": {
+                  "ingress": {
+                    "external": false,
+                    "targetPort": 3003,
+                    "transport": "http"
+                  },
+                  "registries": [
+                    {
+                      "server": "[parameters('acrLoginServer')]",
+                      "username": "[listCredentials(resourceId('Microsoft.ContainerRegistry/registries', parameters('acrName')), '2023-07-01').username]",
+                      "passwordSecretRef": "acr-password"
+                    }
+                  ],
+                  "secrets": [
+                    {
+                      "name": "acr-password",
+                      "value": "[listCredentials(resourceId('Microsoft.ContainerRegistry/registries', parameters('acrName')), '2023-07-01').passwords[0].value]"
+                    },
+                    {
+                      "name": "postgres-url",
+                      "value": "[parameters('postgresUrl')]"
+                    },
+                    {
+                      "name": "redis-url",
+                      "value": "[parameters('redisUrl')]"
+                    }
+                  ]
+                },
+                "template": {
+                  "containers": [
+                    {
+                      "name": "subscription-service",
+                      "image": "[format('{0}/subscription-service:latest', parameters('acrLoginServer'))]",
+                      "resources": {
+                        "cpu": "[json('0.25')]",
+                        "memory": "0.5Gi"
+                      },
+                      "env": [
+                        {
+                          "name": "PORT",
+                          "value": "3003"
+                        },
+                        {
+                          "name": "DATABASE_URL",
+                          "secretRef": "postgres-url"
+                        },
+                        {
+                          "name": "REDIS_URL",
+                          "secretRef": "redis-url"
+                        }
+                      ]
+                    }
+                  ],
+                  "scale": {
+                    "minReplicas": 1,
+                    "maxReplicas": 3
+                  }
+                }
+              }
+            },
+            {
+              "type": "Microsoft.App/containerApps",
+              "apiVersion": "2023-11-02-preview",
+              "name": "integration-service",
+              "location": "[parameters('location')]",
+              "tags": "[parameters('tags')]",
+              "properties": {
+                "environmentId": "[parameters('envId')]",
+                "configuration": {
+                  "ingress": {
+                    "external": false,
+                    "targetPort": 3004,
+                    "transport": "http"
+                  },
+                  "registries": [
+                    {
+                      "server": "[parameters('acrLoginServer')]",
+                      "username": "[listCredentials(resourceId('Microsoft.ContainerRegistry/registries', parameters('acrName')), '2023-07-01').username]",
+                      "passwordSecretRef": "acr-password"
+                    }
+                  ],
+                  "secrets": [
+                    {
+                      "name": "acr-password",
+                      "value": "[listCredentials(resourceId('Microsoft.ContainerRegistry/registries', parameters('acrName')), '2023-07-01').passwords[0].value]"
+                    },
+                    {
+                      "name": "postgres-url",
+                      "value": "[parameters('postgresUrl')]"
+                    },
+                    {
+                      "name": "redis-url",
+                      "value": "[parameters('redisUrl')]"
+                    },
+                    {
+                      "name": "webhook-secret",
+                      "value": "[parameters('webhookSecret')]"
+                    }
+                  ]
+                },
+                "template": {
+                  "containers": [
+                    {
+                      "name": "integration-service",
+                      "image": "[format('{0}/integration-service:latest', parameters('acrLoginServer'))]",
+                      "resources": {
+                        "cpu": "[json('0.5')]",
+                        "memory": "1Gi"
+                      },
+                      "env": [
+                        {
+                          "name": "PORT",
+                          "value": "3004"
+                        },
+                        {
+                          "name": "DATABASE_URL",
+                          "secretRef": "postgres-url"
+                        },
+                        {
+                          "name": "REDIS_URL",
+                          "secretRef": "redis-url"
+                        },
+                        {
+                          "name": "WEBHOOK_SECRET",
+                          "secretRef": "webhook-secret"
+                        }
+                      ]
+                    }
+                  ],
+                  "scale": {
+                    "minReplicas": 1,
+                    "maxReplicas": 5
+                  }
+                }
+              }
+            },
+            {
+              "type": "Microsoft.App/containerApps",
+              "apiVersion": "2023-11-02-preview",
+              "name": "mapping-engine",
+              "location": "[parameters('location')]",
+              "tags": "[parameters('tags')]",
+              "properties": {
+                "environmentId": "[parameters('envId')]",
+                "configuration": {
+                  "ingress": {
+                    "external": false,
+                    "targetPort": 3005,
+                    "transport": "http"
+                  },
+                  "registries": [
+                    {
+                      "server": "[parameters('acrLoginServer')]",
+                      "username": "[listCredentials(resourceId('Microsoft.ContainerRegistry/registries', parameters('acrName')), '2023-07-01').username]",
+                      "passwordSecretRef": "acr-password"
+                    }
+                  ],
+                  "secrets": [
+                    {
+                      "name": "acr-password",
+                      "value": "[listCredentials(resourceId('Microsoft.ContainerRegistry/registries', parameters('acrName')), '2023-07-01').passwords[0].value]"
+                    },
+                    {
+                      "name": "postgres-url",
+                      "value": "[parameters('postgresUrl')]"
+                    },
+                    {
+                      "name": "aoai-api-key",
+                      "value": "[parameters('azureOpenAiApiKey')]"
+                    }
+                  ]
+                },
+                "template": {
+                  "containers": [
+                    {
+                      "name": "mapping-engine",
+                      "image": "[format('{0}/mapping-engine:latest', parameters('acrLoginServer'))]",
+                      "resources": {
+                        "cpu": "[json('0.5')]",
+                        "memory": "1Gi"
+                      },
+                      "env": [
+                        {
+                          "name": "PORT",
+                          "value": "3005"
+                        },
+                        {
+                          "name": "DATABASE_URL",
+                          "secretRef": "postgres-url"
+                        },
+                        {
+                          "name": "AZURE_OPENAI_API_KEY",
+                          "secretRef": "aoai-api-key"
+                        },
+                        {
+                          "name": "AZURE_OPENAI_ENDPOINT",
+                          "value": "[parameters('azureOpenAiEndpoint')]"
+                        },
+                        {
+                          "name": "AZURE_OPENAI_DEPLOYMENT",
+                          "value": "[parameters('azureOpenAiDeployment')]"
+                        },
+                        {
+                          "name": "AZURE_OPENAI_API_VERSION",
+                          "value": "[parameters('azureOpenAiApiVersion')]"
+                        }
+                      ]
+                    }
+                  ],
+                  "scale": {
+                    "minReplicas": 1,
+                    "maxReplicas": 3
+                  }
+                }
+              }
+            },
+            {
+              "type": "Microsoft.App/containerApps",
+              "apiVersion": "2023-11-02-preview",
+              "name": "agent-orchestrator",
+              "location": "[parameters('location')]",
+              "tags": "[parameters('tags')]",
+              "properties": {
+                "environmentId": "[parameters('envId')]",
+                "configuration": {
+                  "ingress": {
+                    "external": false,
+                    "targetPort": 3006,
+                    "transport": "http"
+                  },
+                  "registries": [
+                    {
+                      "server": "[parameters('acrLoginServer')]",
+                      "username": "[listCredentials(resourceId('Microsoft.ContainerRegistry/registries', parameters('acrName')), '2023-07-01').username]",
+                      "passwordSecretRef": "acr-password"
+                    }
+                  ],
+                  "secrets": [
+                    {
+                      "name": "acr-password",
+                      "value": "[listCredentials(resourceId('Microsoft.ContainerRegistry/registries', parameters('acrName')), '2023-07-01').passwords[0].value]"
+                    },
+                    {
+                      "name": "postgres-url",
+                      "value": "[parameters('postgresUrl')]"
+                    },
+                    {
+                      "name": "redis-url",
+                      "value": "[parameters('redisUrl')]"
+                    },
+                    {
+                      "name": "webhook-secret",
+                      "value": "[parameters('webhookSecret')]"
+                    },
+                    {
+                      "name": "aoai-api-key",
+                      "value": "[parameters('azureOpenAiApiKey')]"
+                    }
+                  ]
+                },
+                "template": {
+                  "containers": [
+                    {
+                      "name": "agent-orchestrator",
+                      "image": "[format('{0}/agent-orchestrator:latest', parameters('acrLoginServer'))]",
+                      "resources": {
+                        "cpu": "[json('0.25')]",
+                        "memory": "0.5Gi"
+                      },
+                      "env": [
+                        {
+                          "name": "PORT",
+                          "value": "3006"
+                        },
+                        {
+                          "name": "DATABASE_URL",
+                          "secretRef": "postgres-url"
+                        },
+                        {
+                          "name": "REDIS_URL",
+                          "secretRef": "redis-url"
+                        },
+                        {
+                          "name": "WEBHOOK_SECRET",
+                          "secretRef": "webhook-secret"
+                        },
+                        {
+                          "name": "AZURE_OPENAI_API_KEY",
+                          "secretRef": "aoai-api-key"
+                        },
+                        {
+                          "name": "AZURE_OPENAI_ENDPOINT",
+                          "value": "[parameters('azureOpenAiEndpoint')]"
+                        },
+                        {
+                          "name": "AZURE_OPENAI_DEPLOYMENT",
+                          "value": "[parameters('azureOpenAiDeployment')]"
+                        },
+                        {
+                          "name": "AZURE_OPENAI_API_VERSION",
+                          "value": "[parameters('azureOpenAiApiVersion')]"
+                        }
+                      ]
+                    }
+                  ],
+                  "scale": {
+                    "minReplicas": 1,
+                    "maxReplicas": 1
+                  }
+                }
+              }
+            },
+            {
+              "type": "Microsoft.App/containerApps",
+              "apiVersion": "2023-11-02-preview",
+              "name": "billing-service",
+              "location": "[parameters('location')]",
+              "tags": "[parameters('tags')]",
+              "properties": {
+                "environmentId": "[parameters('envId')]",
+                "configuration": {
+                  "ingress": {
+                    "external": false,
+                    "targetPort": 3007,
+                    "transport": "http"
+                  },
+                  "registries": [
+                    {
+                      "server": "[parameters('acrLoginServer')]",
+                      "username": "[listCredentials(resourceId('Microsoft.ContainerRegistry/registries', parameters('acrName')), '2023-07-01').username]",
+                      "passwordSecretRef": "acr-password"
+                    }
+                  ],
+                  "secrets": [
+                    {
+                      "name": "acr-password",
+                      "value": "[listCredentials(resourceId('Microsoft.ContainerRegistry/registries', parameters('acrName')), '2023-07-01').passwords[0].value]"
+                    },
+                    {
+                      "name": "postgres-url",
+                      "value": "[parameters('postgresUrl')]"
+                    },
+                    {
+                      "name": "redis-url",
+                      "value": "[parameters('redisUrl')]"
+                    }
+                  ]
+                },
+                "template": {
+                  "containers": [
+                    {
+                      "name": "billing-service",
+                      "image": "[format('{0}/billing-service:latest', parameters('acrLoginServer'))]",
+                      "resources": {
+                        "cpu": "[json('0.25')]",
+                        "memory": "0.5Gi"
+                      },
+                      "env": [
+                        {
+                          "name": "PORT",
+                          "value": "3007"
+                        },
+                        {
+                          "name": "DATABASE_URL",
+                          "secretRef": "postgres-url"
+                        },
+                        {
+                          "name": "REDIS_URL",
+                          "secretRef": "redis-url"
+                        }
+                      ]
+                    }
+                  ],
+                  "scale": {
+                    "minReplicas": 1,
+                    "maxReplicas": 2
+                  }
+                }
+              }
+            },
+            {
+              "type": "Microsoft.App/containerApps",
+              "apiVersion": "2023-11-02-preview",
+              "name": "gateway",
+              "location": "[parameters('location')]",
+              "tags": "[parameters('tags')]",
+              "properties": {
+                "environmentId": "[parameters('envId')]",
+                "configuration": {
+                  "ingress": {
+                    "external": true,
+                    "targetPort": 3000,
+                    "transport": "http",
+                    "allowInsecure": false
+                  },
+                  "registries": [
+                    {
+                      "server": "[parameters('acrLoginServer')]",
+                      "username": "[listCredentials(resourceId('Microsoft.ContainerRegistry/registries', parameters('acrName')), '2023-07-01').username]",
+                      "passwordSecretRef": "acr-password"
+                    }
+                  ],
+                  "secrets": [
+                    {
+                      "name": "acr-password",
+                      "value": "[listCredentials(resourceId('Microsoft.ContainerRegistry/registries', parameters('acrName')), '2023-07-01').passwords[0].value]"
+                    },
+                    {
+                      "name": "jwt-secret",
+                      "value": "[parameters('jwtSecret')]"
+                    }
+                  ]
+                },
+                "template": {
+                  "containers": [
+                    {
+                      "name": "gateway",
+                      "image": "[format('{0}/gateway:latest', parameters('acrLoginServer'))]",
+                      "resources": {
+                        "cpu": "[json('0.5')]",
+                        "memory": "1Gi"
+                      },
+                      "env": [
+                        {
+                          "name": "PORT",
+                          "value": "3000"
+                        },
+                        {
+                          "name": "JWT_SECRET",
+                          "secretRef": "jwt-secret"
+                        },
+                        {
+                          "name": "AUTH_SERVICE_URL",
+                          "value": "[variables('authUrl')]"
+                        },
+                        {
+                          "name": "PARTNER_SERVICE_URL",
+                          "value": "[variables('partnerUrl')]"
+                        },
+                        {
+                          "name": "SUBSCRIPTION_SERVICE_URL",
+                          "value": "[variables('subscriptionUrl')]"
+                        },
+                        {
+                          "name": "INTEGRATION_SERVICE_URL",
+                          "value": "[variables('integrationUrl')]"
+                        },
+                        {
+                          "name": "MAPPING_ENGINE_URL",
+                          "value": "[variables('mappingUrl')]"
+                        },
+                        {
+                          "name": "AGENT_ORCHESTRATOR_URL",
+                          "value": "[variables('agentUrl')]"
+                        },
+                        {
+                          "name": "BILLING_SERVICE_URL",
+                          "value": "[variables('billingUrl')]"
+                        },
+                        {
+                          "name": "CORS_ORIGIN",
+                          "value": "[parameters('corsOrigin')]"
+                        },
+                        {
+                          "name": "RATE_LIMIT_MAX",
+                          "value": "200"
+                        }
+                      ]
+                    }
+                  ],
+                  "scale": {
+                    "minReplicas": 1,
+                    "maxReplicas": 5
+                  }
+                }
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.App/containerApps', 'agent-orchestrator')]",
+                "[resourceId('Microsoft.App/containerApps', 'auth-service')]",
+                "[resourceId('Microsoft.App/containerApps', 'billing-service')]",
+                "[resourceId('Microsoft.App/containerApps', 'integration-service')]",
+                "[resourceId('Microsoft.App/containerApps', 'mapping-engine')]",
+                "[resourceId('Microsoft.App/containerApps', 'partner-service')]",
+                "[resourceId('Microsoft.App/containerApps', 'subscription-service')]"
+              ]
+            },
+            {
+              "type": "Microsoft.App/containerApps",
+              "apiVersion": "2023-11-02-preview",
+              "name": "partner-portal",
+              "location": "[parameters('location')]",
+              "tags": "[parameters('tags')]",
+              "properties": {
+                "environmentId": "[parameters('envId')]",
+                "configuration": {
+                  "ingress": {
+                    "external": true,
+                    "targetPort": 3100,
+                    "transport": "http",
+                    "allowInsecure": false
+                  },
+                  "registries": [
+                    {
+                      "server": "[parameters('acrLoginServer')]",
+                      "username": "[listCredentials(resourceId('Microsoft.ContainerRegistry/registries', parameters('acrName')), '2023-07-01').username]",
+                      "passwordSecretRef": "acr-password"
+                    }
+                  ],
+                  "secrets": [
+                    {
+                      "name": "acr-password",
+                      "value": "[listCredentials(resourceId('Microsoft.ContainerRegistry/registries', parameters('acrName')), '2023-07-01').passwords[0].value]"
+                    }
+                  ]
+                },
+                "template": {
+                  "containers": [
+                    {
+                      "name": "partner-portal",
+                      "image": "[format('{0}/partner-portal:latest', parameters('acrLoginServer'))]",
+                      "resources": {
+                        "cpu": "[json('0.5')]",
+                        "memory": "1Gi"
+                      },
+                      "env": [
+                        {
+                          "name": "NEXT_PUBLIC_API_URL",
+                          "value": "[format('https://{0}', reference(resourceId('Microsoft.App/containerApps', 'gateway'), '2023-11-02-preview').configuration.ingress.fqdn)]"
+                        }
+                      ]
+                    }
+                  ],
+                  "scale": {
+                    "minReplicas": 1,
+                    "maxReplicas": 3
+                  }
+                }
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.App/containerApps', 'gateway')]"
+              ]
+            }
+          ],
+          "outputs": {
+            "gatewayUrl": {
+              "type": "string",
+              "value": "[format('https://{0}', reference(resourceId('Microsoft.App/containerApps', 'gateway'), '2023-11-02-preview').configuration.ingress.fqdn)]"
+            },
+            "portalUrl": {
+              "type": "string",
+              "value": "[format('https://{0}', reference(resourceId('Microsoft.App/containerApps', 'partner-portal'), '2023-11-02-preview').configuration.ingress.fqdn)]"
+            }
+          }
+        }
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Resources/deployments', 'acr')]",
+        "[resourceId('Microsoft.Resources/deployments', 'containerenv')]",
+        "[resourceId('Microsoft.Resources/deployments', 'postgres')]",
+        "[resourceId('Microsoft.Resources/deployments', 'redis')]"
+      ]
+    }
+  ],
+  "outputs": {
+    "acrLoginServer": {
+      "type": "string",
+      "value": "[reference(resourceId('Microsoft.Resources/deployments', 'acr'), '2022-09-01').outputs.loginServer.value]"
+    },
+    "gatewayUrl": {
+      "type": "string",
+      "value": "[reference(resourceId('Microsoft.Resources/deployments', 'services'), '2022-09-01').outputs.gatewayUrl.value]"
+    },
+    "portalUrl": {
+      "type": "string",
+      "value": "[reference(resourceId('Microsoft.Resources/deployments', 'services'), '2022-09-01').outputs.portalUrl.value]"
+    },
+    "postgresHost": {
+      "type": "string",
+      "value": "[reference(resourceId('Microsoft.Resources/deployments', 'postgres'), '2022-09-01').outputs.fqdn.value]"
+    },
+    "redisHost": {
+      "type": "string",
+      "value": "[reference(resourceId('Microsoft.Resources/deployments', 'redis'), '2022-09-01').outputs.hostName.value]"
+    }
+  }
+}
