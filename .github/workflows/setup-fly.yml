@@ -133,8 +133,8 @@ jobs:
       - name: Run DB migration
         if: ${{ inputs.run_migration == 'true' }}
         run: |
-          flyctl postgres connect --app bx-postgres \
-            < packages/database/migrations/001_schema.sql
+          { cat packages/database/migrations/001_schema.sql; printf '\\q\n'; } \
+            | flyctl postgres connect --app bx-postgres
         continue-on-error: true   # idempotent
 
       # ── Summary ───────────────────────────────────────────────────────────
