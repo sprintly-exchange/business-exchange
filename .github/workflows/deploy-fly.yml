@@ -26,9 +26,8 @@ jobs:
         # (partner-service has psql available via pg client in the image, OR
         #  we run against Fly Postgres directly with the connection string)
         run: |
-          flyctl postgres connect \
-            --app bx-postgres \
-            --command "$(cat packages/database/migrations/001_schema.sql)"
+          flyctl postgres connect --app bx-postgres \
+            < packages/database/migrations/001_schema.sql
         continue-on-error: true   # idempotent — safe to re-run
 
   # ── 2. Deploy backend services in parallel ─────────────────────────────────
