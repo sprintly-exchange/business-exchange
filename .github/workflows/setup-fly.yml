@@ -1,0 +1,150 @@
+name: 🚀 Fly.io One-Time Setup
+
+# Run this ONCE manually from GitHub → Actions → "Fly.io One-Time Setup" → Run workflow
+# After this runs successfully, the deploy-fly.yml workflow handles all future deploys.
+on:
+  workflow_dispatch:
+    inputs:
+      run_migration:
+        description: 'Run DB migration after setup?'
+        required: true
+        default: 'true'
+        type: choice
+        options: ['true', 'false']
+
+jobs:
+  setup:
+    name: Provision Fly.io infrastructure
+    runs-on: ubuntu-latest
+    env:
+      FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: superfly/flyctl-actions/setup-flyctl@master
+
+      # ── Create all apps ────────────────────────────────────────────────────
+      - name: Create Fly apps
+        run: |
+          APPS=(
+            bx-gateway
+            bx-auth-service
+            bx-partner-service
+            bx-subscription-service
+            bx-integration-service
+            bx-mapping-engine
+            bx-agent-orchestrator
+            bx-billing-service
+            bx-partner-portal
+          )
+          ORG="${{ vars.FLY_ORG || 'personal' }}"
+          for app in "${APPS[@]}"; do
+            if flyctl apps list | grep -q "$app"; then
+              echo "✓ $app already exists"
+            else
+              flyctl apps create "$app" --org "$ORG"
+              echo "✓ created $app"
+            fi
+          done
+
+      # ── Create Postgres ────────────────────────────────────────────────────
+      - name: Create Fly Postgres
+        run: |
+          if flyctl apps list | grep -q "bx-postgres"; then
+            echo "✓ bx-postgres already exists"
+          else
+            flyctl postgres create \
+              --name bx-postgres \
+              --org "${{ vars.FLY_ORG || 'personal' }}" \
+              --region "${{ vars.FLY_REGION || 'lhr' }}" \
+              --vm-size shared-cpu-1x \
+              --volume-size 10 \
+              --initial-cluster-size 1
+          fi
+
+      # ── Set secrets on backend services ───────────────────────────────────
+      - name: Set secrets — auth-service
+        run: |
+          flyctl secrets set -a bx-auth-service \
+            DATABASE_URL="${{ secrets.DATABASE_URL }}" \
+            JWT_SECRET="${{ secrets.JWT_SECRET }}" \
+            NODE_ENV="production"
+
+      - name: Set secrets — partner-service
+        run: |
+          flyctl secrets set -a bx-partner-service \
+            DATABASE_URL="${{ secrets.DATABASE_URL }}" \
+            JWT_SECRET="${{ secrets.JWT_SECRET }}" \
+            NODE_ENV="production"
+
+      - name: Set secrets — subscription-service
+        run: |
+          flyctl secrets set -a bx-subscription-service \
+            DATABASE_URL="${{ secrets.DATABASE_URL }}" \
+            JWT_SECRET="${{ secrets.JWT_SECRET }}" \
+            NODE_ENV="production"
+
+      - name: Set secrets — integration-service
+        run: |
+          flyctl secrets set -a bx-integration-service \
+            DATABASE_URL="${{ secrets.DATABASE_URL }}" \
+            JWT_SECRET="${{ secrets.JWT_SECRET }}" \
+            NODE_ENV="production"
+
+      - name: Set secrets — billing-service
+        run: |
+          flyctl secrets set -a bx-billing-service \
+            DATABASE_URL="${{ secrets.DATABASE_URL }}" \
+            JWT_SECRET="${{ secrets.JWT_SECRET }}" \
+            NODE_ENV="production"
+
+      - name: Set secrets — agent-orchestrator
+        run: |
+          flyctl secrets set -a bx-agent-orchestrator \
+            DATABASE_URL="${{ secrets.DATABASE_URL }}" \
+            JWT_SECRET="${{ secrets.JWT_SECRET }}" \
+            NODE_ENV="production"
+
+      - name: Set secrets — gateway
+        run: |
+          flyctl secrets set -a bx-gateway \
+            DATABASE_URL="${{ secrets.DATABASE_URL }}" \
+            JWT_SECRET="${{ secrets.JWT_SECRET }}" \
+            NODE_ENV="production"
+
+      # ── mapping-engine — AI provider secrets ──────────────────────────────
+      - name: Set secrets — mapping-engine
+        run: |
+          flyctl secrets set -a bx-mapping-engine \
+            DATABASE_URL="${{ secrets.DATABASE_URL }}" \
+            JWT_SECRET="${{ secrets.JWT_SECRET }}" \
+            NODE_ENV="production" \
+            AI_PROVIDER="${{ vars.AI_PROVIDER || 'azure' }}" \
+            AZURE_OPENAI_API_KEY="${{ secrets.AZURE_OPENAI_API_KEY }}" \
+            AZURE_OPENAI_ENDPOINT="${{ vars.AZURE_OPENAI_ENDPOINT }}" \
+            AZURE_OPENAI_DEPLOYMENT="${{ vars.AZURE_OPENAI_DEPLOYMENT || 'gpt-4o-mini' }}" \
+            AZURE_OPENAI_API_VERSION="${{ vars.AZURE_OPENAI_API_VERSION || '2024-08-01-preview' }}" \
+            OPENAI_API_KEY="${{ secrets.OPENAI_API_KEY }}" \
+            OPENAI_MODEL="${{ vars.OPENAI_MODEL || 'gpt-4o-mini' }}" \
+            OPENAI_BASE_URL="${{ vars.OPENAI_BASE_URL }}"
+
+      # ── Run DB migration ───────────────────────────────────────────────────
+      - name: Run DB migration
+        if: ${{ inputs.run_migration == 'true' }}
+        run: |
+          { cat packages/database/migrations/001_schema.sql; printf '\\q\n'; } \
+            | flyctl postgres connect --app bx-postgres
+        continue-on-error: true   # idempotent
+
+      # ── Summary ───────────────────────────────────────────────────────────
+      - name: Print summary
+        run: |
+          echo "✅ Setup complete!"
+          echo ""
+          echo "All apps created and secrets set."
+          echo "Trigger the 'Deploy to Fly.io' workflow to build and deploy."
+          echo ""
+          echo "Expected URLs after deploy:"
+          echo "  Portal:  https://bx-partner-portal.fly.dev"
+          echo "  Gateway: https://bx-gateway.fly.dev"

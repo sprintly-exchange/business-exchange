@@ -1,0 +1,134 @@
+name: Deploy to Fly.io
+
+on:
+  workflow_dispatch:
+    branches: [main]
+  #workflow_dispatch:       # allow manual trigger from GitHub UI
+
+concurrency:
+  group: fly-deploy
+  cancel-in-progress: false   # never cancel an in-flight deploy
+
+jobs:
+  # ── 1. Run DB migrations first ─────────────────────────────────────────────
+  migrate:
+    name: Run DB migrations
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: superfly/flyctl-actions/setup-flyctl@master
+
+      - name: Run migration SQL
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+        # Pipe the SQL file followed by \q so psql exits cleanly after running
+        # the migrations. Without the explicit \q, flyctl postgres connect keeps
+        # the interactive session open waiting for more input even after the
+        # file's EOF is reached.
+        run: |
+          { cat packages/database/migrations/001_schema.sql; printf '\\q\n'; } \
+            | flyctl postgres connect --app bx-postgres
+        continue-on-error: true   # idempotent — safe to re-run
+
+  # ── 2. Deploy backend services in parallel ─────────────────────────────────
+  deploy-backend:
+    name: Deploy ${{ matrix.app }}
+    needs: migrate
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false           # keep deploying other services if one fails
+      matrix:
+        include:
+          - app: bx-auth-service
+            dir: apps/auth-service
+          - app: bx-partner-service
+            dir: apps/partner-service
+          - app: bx-subscription-service
+            dir: apps/subscription-service
+          - app: bx-integration-service
+            dir: apps/integration-service
+          - app: bx-mapping-engine
+            dir: apps/mapping-engine
+          - app: bx-agent-orchestrator
+            dir: apps/agent-orchestrator
+          - app: bx-billing-service
+            dir: apps/billing-service
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: superfly/flyctl-actions/setup-flyctl@master
+
+      - name: Deploy ${{ matrix.app }}
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+        run: |
+          flyctl deploy \
+            --app ${{ matrix.app }} \
+            --config ${{ matrix.dir }}/fly.toml \
+            --remote-only \
+            --wait-timeout 180
+
+  # ── 3. Deploy gateway (after all backend services are up) ──────────────────
+  deploy-gateway:
+    name: Deploy gateway
+    needs: deploy-backend
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: superfly/flyctl-actions/setup-flyctl@master
+
+      - name: Deploy bx-gateway
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+        run: |
+          flyctl deploy \
+            --app bx-gateway \
+            --config apps/gateway/fly.toml \
+            --remote-only \
+            --wait-timeout 180
+
+  # ── 4. Deploy portal (after gateway is confirmed up) ───────────────────────
+  deploy-portal:
+    name: Deploy partner portal
+    needs: deploy-gateway
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: superfly/flyctl-actions/setup-flyctl@master
+
+      - name: Deploy bx-partner-portal
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+        run: |
+          flyctl deploy \
+            --app bx-partner-portal \
+            --config apps/partner-portal/fly.toml \
+            --build-arg NEXT_PUBLIC_API_URL=${{ vars.GATEWAY_URL || 'https://bx-gateway.fly.dev' }} \
+            --remote-only \
+            --wait-timeout 300
+
+  # ── 5. Smoke test ──────────────────────────────────────────────────────────
+  smoke-test:
+    name: Smoke test
+    needs: deploy-portal
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check gateway health
+        run: |
+          curl -f --retry 5 --retry-delay 10 \
+            https://bx-gateway.fly.dev/health || exit 1
+
+      - name: Check portal
+        run: |
+          curl -f --retry 5 --retry-delay 10 \
+            https://bx-partner-portal.fly.dev/ || exit 1
+
+      - name: Print URLs
+        run: |
+          echo "✅ Gateway:  https://bx-gateway.fly.dev"
+          echo "✅ Portal:   https://bx-partner-portal.fly.dev"
