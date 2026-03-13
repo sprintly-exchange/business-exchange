@@ -47,7 +47,7 @@ apps/
 packages/
   shared-types/        # All shared TypeScript interfaces and types (Partner, Message, Subscription, etc.)
   shared-utils/        # ID generation (UUID), HMAC webhook signing, API key hashing, backoff, pagination
-  database/            # PostgreSQL pool (pg) + Redis client (ioredis), migrations via node-pg-migrate
+  database/            # PostgreSQL pool (pg), migrations via node-pg-migrate
   logger/              # Pino logger factory — createLogger(serviceName)
 ```
 
@@ -82,12 +82,12 @@ import type { Partner, ApiResponse } from '@bx/shared-types';
 
 **Prettier** — single quotes, semicolons, trailing commas (ES5), print width 100, 2-space indent.
 
-**Database** — PostgreSQL accessed via `getPool()` from `@bx/database`. Redis via `getRedis()`. Migrations live in `packages/database/migrations/` as numbered SQL files and run automatically on container start (mounted as `docker-entrypoint-initdb.d`).
+**Database** — PostgreSQL is accessed via `getPool()` from `@bx/database`. Migrations live in `packages/database/migrations/` as numbered SQL files and run automatically on container start (mounted as `docker-entrypoint-initdb.d`).
 
-**Docker ports** — internal service ports (3000–3007) map to external ports 11000–11010. Postgres: 11007→5432, Redis: 11008→6379, partner-portal: 11009.
+**Docker ports** — internal service ports (3000–3007) map to external ports 11000–11010. Postgres: 11007→5432, partner-portal: 11009.
 
 **Webhook security** — use `signPayload` / `verifySignature` from `@bx/shared-utils` (HMAC-SHA256) for webhook payloads. API keys are stored as SHA-256 hashes.
 
-**Environment** — copy `.env.example` to `.env`. Azure OpenAI vars (`AZURE_OPENAI_API_KEY`, `AZURE_OPENAI_ENDPOINT`, `AZURE_OPENAI_DEPLOYMENT`, `AZURE_OPENAI_API_VERSION`) are required for the mapping-engine and agent-orchestrator. All other services only need `DATABASE_URL`, `REDIS_URL`, and `JWT_SECRET`.
+**Environment** — copy `.env.example` to `.env`. Azure OpenAI vars (`AZURE_OPENAI_API_KEY`, `AZURE_OPENAI_ENDPOINT`, `AZURE_OPENAI_DEPLOYMENT`, `AZURE_OPENAI_API_VERSION`) are required for the mapping-engine and agent-orchestrator. All other services only need `DATABASE_URL` and `JWT_SECRET`.
 
 **Partner portal** (Next.js) — uses `src/app` router with route groups. UI components use Radix UI primitives, Tailwind + `clsx`/`tailwind-merge`, forms with `react-hook-form` + `zod` resolvers.

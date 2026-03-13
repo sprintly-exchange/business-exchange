@@ -1,440 +1,459 @@
-# Business Exchange — B2B Integration Platform
+# Business Exchange
 
-A self-service B2B integration platform where companies (partners) register, discover each other, subscribe to data feeds, and exchange business messages across formats (JSON, XML, CSV, EDI) — with AI-powered schema inference and auto-mapping to a canonical data model.
+Business Exchange is a B2B integration platform where partners can register, discover each other, subscribe to data feeds, and exchange business messages across multiple formats such as JSON, XML, CSV, and EDI.
 
----
+The platform uses an AI-powered mapping engine to normalize partner payloads into a canonical data model (CDM) and reshape them into each receiver's preferred format.
 
-## Table of Contents
+## What this repository contains
+
+This is a Turborepo monorepo with:
+
+- backend microservices under `apps/`
+- a Next.js partner/admin portal under `apps/partner-portal`
+- shared packages under `packages/`
+- local infrastructure and deployment assets under `infra/`
+
+## Table of contents
 
 - [Architecture](#architecture)
-- [Getting Started](#getting-started)
+- [Core message flow](#core-message-flow)
+- [Services and ports](#services-and-ports)
+- [Repository layout](#repository-layout)
+- [Getting started](#getting-started)
+- [Environment configuration](#environment-configuration)
+- [Development workflows](#development-workflows)
+- [AI mapping and visibility model](#ai-mapping-and-visibility-model)
 - [Deployment](#deployment)
-  - [Local — Docker Compose](#local--docker-compose)
-  - [Fly.io (Recommended Cloud)](#flyio-recommended-cloud)
-  - [Azure Container Apps](#azure-container-apps)
-- [White-Label Branding](#white-label-branding)
-- [AI Provider Configuration](#ai-provider-configuration)
-- [Admin Access](#admin-access)
-- [Demo Mode](#demo-mode)
-- [Key API Flows](#key-api-flows)
-- [Project Structure](#project-structure)
-- [Autonomous Agents](#autonomous-agents)
-- [Development Commands](#development-commands)
-
----
+- [Demo mode](#demo-mode)
+- [Operational notes](#operational-notes)
+- [Troubleshooting](#troubleshooting)
 
 ## Architecture
 
-All traffic enters through a single **API Gateway** which handles JWT validation and reverse-proxies to the appropriate microservice.
+All external traffic enters through the API gateway. The gateway validates JWTs, applies rate limiting, and reverse-proxies requests to downstream services.
 
-```
-Client
-  │
-  ▼
-┌─────────────────────────────────────────────────────────┐
-│  API Gateway  :3000                                      │
-│  JWT auth · rate limiting · reverse proxy               │
-└──┬──────────┬──────────┬──────────┬──────────┬──────────┘
-   │          │          │          │          │
-   ▼          ▼          ▼          ▼          ▼
-Auth      Partner   Subscription Integration  Mapping     Agent
-:3001     :3002      :3003        :3004       Engine      Orchestrator
-JWT       KYB        Discovery    Routing     :3005       :3006
-OAuth2    Approval   & Mgmt       Webhooks    AI Maps     Cron Agents
-API Keys  Profiles               Retry       JSONata
+```text
+Client / Partner Portal
+        |
+        v
+  API Gateway (:3000 / :11000)
+        |
+        +--> Auth Service
+        +--> Partner Service
+        +--> Subscription Service
+        +--> Integration Service
+        +--> Mapping Engine
+        +--> Agent Orchestrator
+        +--> Billing Service
 ```
 
-| Service | Dev Port | Docker Port | Responsibility |
-|---|---|---|---|
-| API Gateway | 3000 | 11000 | Single entry, auth, rate limiting |
-| Auth Service | 3001 | 11001 | JWT, refresh tokens, OAuth2, API keys |
-| Partner Service | 3002 | 11002 | Registration, profiles, KYB approval, branding |
-| Subscription Service | 3003 | 11003 | Partner discovery & subscription management |
-| Integration Service | 3004 | 11004 | Message routing, webhook delivery, retry logic |
-| Mapping Engine | 3005 | 11005 | AI schema inference + JSONata transforms |
-| Agent Orchestrator | 3006 | 11006 | Autonomous background agents (monitor, retry, alerts) |
-| Billing Service | 3007 | 11010 | Usage tracking, plans, invoice generation |
-| Partner Portal | 3100 | 11009 | Next.js 15 web UI for partners and admins |
-| PostgreSQL | — | 11007 | Primary database |
+The platform is designed around a few main ideas:
 
-**Public routes** (no JWT required):
-- `GET  /api/partners/platform-branding` — platform branding (login page uses this)
-- `POST /api/partners` — partner self-registration
-- `POST /api/auth/login` — login
-- `POST /api/auth/refresh` — token refresh
-- `POST /api/auth/token` — OAuth2 client_credentials
+- partners self-register and maintain their own integration settings
+- subscriptions define which partners are allowed to exchange messages
+- the integration service handles message routing and webhook delivery
+- the mapping engine converts partner-specific payloads through an internal CDM
+- the agent orchestrator performs retry, monitoring, drift detection, and alerting tasks
 
----
+## Core message flow
 
-## Getting Started
+When a partner sends a message, the high-level path is:
+
+1. The sender calls the gateway.
+2. The gateway authenticates the request and forwards it to the integration service.
+3. The integration service verifies there is an active subscription between sender and receiver.
+4. If schemas exist, the mapping engine attempts a two-stage transformation:
+   - sender format -> CDM
+   - CDM -> receiver format
+5. The integration service stores message state and delivers the resulting payload to the receiver webhook.
+6. Retry and monitoring agents handle failed webhook delivery attempts later if needed.
+
+### Public routes
+
+These routes do not require JWT authentication:
+
+- `GET /api/partners/platform-branding`
+- `POST /api/partners`
+- `POST /api/auth/login`
+- `POST /api/auth/refresh`
+- `POST /api/auth/token`
+
+## Services and ports
+
+| Component | Dev Port | Docker Port | Responsibility |
+| --- | --- | --- | --- |
+| Gateway | `3000` | `11000` | Single entry point, JWT auth, rate limiting, reverse proxy |
+| Auth Service | `3001` | `11001` | Login, refresh tokens, OAuth2, API keys |
+| Partner Service | `3002` | `11002` | Partner registration, profiles, KYB approval, branding |
+| Subscription Service | `3003` | `11003` | Discovery and subscription lifecycle |
+| Integration Service | `3004` | `11004` | Message routing, storage, delivery, status tracking |
+| Mapping Engine | `3005` | `11005` | AI schema inference and transformation |
+| Agent Orchestrator | `3006` | `11006` | Monitor, retry, schema-change, and alert agents |
+| Billing Service | `3007` | `11010` | Usage tracking and billing |
+| Partner Portal | `3100` | `11009` | Next.js UI for partners and admins |
+| PostgreSQL | `5432` | `11007` | Primary database |
+
+## Repository layout
+
+```text
+business-exchange/
+├── apps/
+│   ├── gateway/
+│   ├── auth-service/
+│   ├── partner-service/
+│   ├── subscription-service/
+│   ├── integration-service/
+│   ├── mapping-engine/
+│   ├── agent-orchestrator/
+│   ├── billing-service/
+│   └── partner-portal/
+├── packages/
+│   ├── shared-types/
+│   ├── shared-utils/
+│   ├── database/
+│   └── logger/
+├── infra/
+├── docker-compose.yml
+├── turbo.json
+└── package.json
+```
+
+### Shared packages
+
+- `@bx/shared-types`: shared TypeScript contracts such as `ApiResponse<T>`, `Partner`, `Message`, and subscription models
+- `@bx/shared-utils`: IDs, webhook signing, hashing, backoff, and other shared helpers
+- `@bx/database`: PostgreSQL connection and migrations
+- `@bx/logger`: Pino logger factory
+
+## Getting started
 
 ### Prerequisites
 
-- [Node.js](https://nodejs.org/) 20+
-- [Docker Desktop](https://www.docker.com/products/docker-desktop/)
-- An AI provider (Azure OpenAI, OpenAI, or compatible — see [AI Provider Configuration](#ai-provider-configuration))
+- Node.js 20+
+- npm 11+
+- Docker Desktop for containerized local development
+- an AI provider credential set for the mapping engine if you want AI mapping to run
 
-### Quick Start
+### Quick start with Docker Compose
+
+This is the fastest way to bring the full stack up locally.
 
 ```bash
-# 1. Clone
 git clone https://github.com/sprintly-exchange/business-exchange.git
 cd business-exchange
 
-# 2. Configure
 cp .env.example .env
-# Edit .env: set JWT_SECRET, ADMIN_PASSWORD, and AI provider credentials
+# edit .env with at least JWT_SECRET, WEBHOOK_SECRET, and your AI provider settings
 
-# 3. Start everything
-docker compose up -d
-
-# 4. Open the portal
-open http://localhost:11009
+docker compose up -d --build
 ```
 
-The database schema is applied automatically on first startup.
+Then open:
 
----
+- Partner Portal: `http://localhost:11009`
+- Gateway: `http://localhost:11000`
 
-## Deployment
-
-### Local — Docker Compose
+To stop everything:
 
 ```bash
-docker compose up -d                    # start all services
-docker compose up -d --build            # rebuild images first
-docker compose up -d --build <service>  # rebuild a single service
-docker compose logs -f <service>        # tail logs
-docker compose down                     # stop all
+docker compose down
 ```
 
-Service URLs locally:
+### Quick start for workspace development
 
-| Service | URL |
-|---|---|
-| Partner Portal | http://localhost:11009 |
-| API Gateway | http://localhost:11000 |
-| PostgreSQL | localhost:11007 |
-
----
-
-### Fly.io (Recommended Cloud)
-
-The project ships with a full **GitHub Actions CI/CD pipeline** for Fly.io — push to `main` and all services deploy automatically.
-
-#### One-time setup
-
-**1. Add GitHub Secrets** — go to repo → Settings → Secrets and variables → Actions:
-
-| Secret | Description |
-|---|---|
-| `FLY_API_TOKEN` | From `flyctl auth token` |
-| `JWT_SECRET` | Long random string for JWT signing |
-| `DATABASE_URL` | Fly Postgres connection string (filled after step 3) |
-| `AZURE_OPENAI_API_KEY` | Azure OpenAI key (if using Azure) |
-| `OPENAI_API_KEY` | OpenAI key (if using OpenAI) |
-
-**2. Add GitHub Variables** — same location, Variables tab:
-
-| Variable | Example value |
-|---|---|
-| `FLY_ORG` | `personal` |
-| `FLY_REGION` | `lhr` (London) · `iad` (US East) · `sin` (Singapore) |
-| `GATEWAY_URL` | `https://bx-gateway.fly.dev` |
-| `AI_PROVIDER` | `azure` · `openai` · `openai-compatible` |
-| `AZURE_OPENAI_ENDPOINT` | `https://<resource>.openai.azure.com/` |
-| `AZURE_OPENAI_DEPLOYMENT` | `gpt-4.1` |
-| `AZURE_OPENAI_API_VERSION` | `2024-12-01-preview` |
-| `OPENAI_MODEL` | `gpt-4o-mini` |
-
-**3. Run the setup workflow** — GitHub → Actions → **🚀 Fly.io One-Time Setup** → Run workflow.
-
-This provisions all 9 Fly apps, creates Fly Postgres, sets all secrets, and runs the DB migration.
-
-**4. Done** — every push to `main` now auto-deploys via the **Deploy to Fly.io** workflow.
-
-#### Deployment pipeline
-
-```
-push to main
-  │
-  ├─ migrate          (run 001_schema.sql against Fly Postgres)
-  │
-  ├─ deploy-backend   (7 services in parallel — auth, partner, subscription,
-  │                    integration, mapping-engine, agent, billing)
-  │
-  ├─ deploy-gateway   (after all backends are healthy)
-  │
-  ├─ deploy-portal    (after gateway — passes GATEWAY_URL as build arg)
-  │
-  └─ smoke-test       (curl /health on gateway + portal)
-```
-
-#### Fly.io URLs
-
-| Service | URL |
-|---|---|
-| Partner Portal | https://bx-partner-portal.fly.dev |
-| API Gateway | https://bx-gateway.fly.dev |
-
-Services communicate internally via Fly private networking (`*.internal`) — backend services are not exposed to the public internet.
-
----
-
-### Azure Container Apps
-
-The platform is also deployable to Azure Container Apps using the Bicep templates in `infra/bicep/`.
+If you want hot reload directly from the monorepo:
 
 ```bash
-# Login
-az login
-az acr login --name bxacrprod
-
-# Build and push (example for partner-portal)
-SHA=$(git rev-parse --short HEAD)
-docker buildx build --platform linux/amd64 \
-  --build-arg NEXT_PUBLIC_API_URL=https://gateway.<env>.azurecontainerapps.io \
-  -t bxacrprod.azurecr.io/partner-portal:$SHA \
-  -f apps/partner-portal/Dockerfile . --push
-
-az containerapp update \
-  --name partner-portal \
-  --resource-group <resource-group> \
-  --image bxacrprod.azurecr.io/partner-portal:$SHA
+npm install
+cp .env.example .env
+npm run dev
 ```
 
-Azure internal service URLs use the Container Apps internal DNS:
-`http://auth-service:3001`, `http://partner-service:3002`, etc.
-
----
-
-## White-Label Branding
-
-The platform is fully white-labelable. An admin can configure:
-
-| Setting | Where it appears |
-|---|---|
-| **Platform name** | Sidebar, login page, browser tab title |
-| **Tagline** | Login page subtitle |
-| **Logo** | Sidebar header + login page (URL or file upload) |
-| **Primary / accent colors** | Buttons, active nav, accent elements |
-
-**To configure:** sign in as admin → **Admin Settings → Platform Branding** → save.
-
-Changes take effect immediately for all users without a redeploy.
-
-Partners can also set their own branding (colors, logo) via **Settings → Partner Branding**, which overrides the platform defaults for their own views.
-
----
-
-## AI Provider Configuration
-
-The mapping-engine supports three AI providers controlled by a single env var:
+Useful variants:
 
 ```bash
-# ── Azure OpenAI (default) ────────────────────────────────
+npm run build
+npm run typecheck
+npm run lint
+
+cd apps/gateway && npm run dev
+cd apps/partner-portal && npm run dev
+cd packages/database && npm run db:migrate
+cd packages/database && npm run db:migrate:down
+```
+
+### Health checks
+
+Each backend service follows the same service pattern and exposes a `/health` endpoint. The most important local checks are:
+
+- gateway: `http://localhost:11000/health`
+- partner portal: `http://localhost:11009`
+
+## Environment configuration
+
+Start from `.env.example`.
+
+### Required for local development
+
+```bash
+JWT_SECRET=change-me
+WEBHOOK_SECRET=change-me-too
+AI_PROVIDER=azure
+```
+
+### AI provider options
+
+The mapping engine supports three provider modes.
+
+#### Azure OpenAI
+
+```bash
 AI_PROVIDER=azure
 AZURE_OPENAI_API_KEY=...
 AZURE_OPENAI_ENDPOINT=https://<resource>.openai.azure.com/
-AZURE_OPENAI_DEPLOYMENT=gpt-4.1
-AZURE_OPENAI_API_VERSION=2024-12-01-preview
+AZURE_OPENAI_DEPLOYMENT=gpt-4o-mini
+AZURE_OPENAI_API_VERSION=2024-08-01-preview
+```
 
-# ── Plain OpenAI ──────────────────────────────────────────
+#### OpenAI
+
+```bash
 AI_PROVIDER=openai
 OPENAI_API_KEY=sk-...
 OPENAI_MODEL=gpt-4o-mini
+```
 
-# ── OpenAI-compatible (Groq, Ollama, Together AI, etc.) ───
+#### OpenAI-compatible
+
+```bash
 AI_PROVIDER=openai-compatible
-OPENAI_API_KEY=gsk_...
+OPENAI_API_KEY=...
 OPENAI_MODEL=llama-3.1-8b-instant
 OPENAI_BASE_URL=https://api.groq.com/openai/v1
 ```
 
-Switch providers at any time by updating the env var — no code changes needed.
+### Other useful variables
 
----
+From `.env.example`:
 
-## Admin Access
+- `CORS_ORIGIN`
+- `LOG_LEVEL`
+- `RATE_LIMIT_MAX`
+- `MAPPING_ENGINE_URL`
+- `ENCRYPTION_KEY`
 
-A platform admin user is created automatically on first startup.
+## Development workflows
+
+### Common commands
+
+| Command | What it does |
+| --- | --- |
+| `npm install` | Install all workspace dependencies |
+| `npm run dev` | Run all services with hot reload through Turbo |
+| `npm run build` | Build every workspace |
+| `npm run typecheck` | Type-check every workspace |
+| `npm run lint` | Run lint across workspaces |
+| `npm run clean` | Clean workspace artifacts and root `node_modules` |
+
+### Single-service development
+
+Examples:
+
+```bash
+cd apps/gateway && npm run dev
+cd apps/integration-service && npm run dev
+cd apps/partner-portal && npm run dev
+```
+
+### Database migrations
+
+The Docker setup mounts `packages/database/migrations` into Postgres initialization. For manual migration work:
+
+```bash
+cd packages/database && npm run db:migrate
+cd packages/database && npm run db:migrate:down
+```
+
+### Current test posture
+
+The monorepo exposes a root `npm run test`, but there are currently no meaningful automated test suites checked in for most services. Right now, `typecheck` is the main repository-wide validation path.
+
+## AI mapping and visibility model
+
+### Canonical Data Model (CDM)
+
+The mapping engine uses an internal CDM as an intermediate representation between sender and receiver formats.
+
+Typical transformation path:
+
+```text
+Sender Payload -> CDM -> Receiver Payload
+```
+
+### Visibility rules in the integrations UI
+
+The project currently uses viewer-aware payload visibility in the message detail experience:
+
+- sender sees the original raw payload and the CDM
+- receiver sees the CDM and the delivered payload in the receiver-facing format
+- admin sees all payload variants
+
+This keeps the sender's original raw payload private from receivers while still letting receivers inspect the intermediate normalized representation.
+
+### Mapping fallback behavior
+
+If mapping fails or times out:
+
+- the message can still be delivered successfully
+- the UI shows delivery status separately from mapping status
+- mapping fallback is surfaced as a warning rather than a delivery failure
+- senders can resend the original payload from the message detail UI
+
+## Deployment
+
+### Local Docker Compose
+
+```bash
+docker compose up -d
+docker compose up -d --build
+docker compose logs -f gateway
+docker compose logs -f partner-portal
+docker compose down
+```
+
+### Fly.io
+
+This repository includes Fly.io deployment support and example Fly environment files:
+
+- `.env.fly.example`
+- `infra/fly/`
+- GitHub Actions workflows for setup and deployment
+
+Typical Fly flow:
+
+1. copy `.env.fly.example` to `.env.fly`
+2. fill in Fly and secret values
+3. provision via the Fly setup flow
+4. deploy from `main`
+
+### Azure Container Apps
+
+Infrastructure templates for Azure live under `infra/bicep/`.
+
+The partner portal needs the gateway URL as a build-time input when deployed externally.
+
+## Demo mode
+
+Demo mode seeds a realistic working environment for demos and manual testing.
+
+### What it gives you
+
+- preconfigured partner companies
+- seeded subscriptions
+- seeded messages across different industries and formats
+- predictable login credentials for demos
+
+### Demo accounts
+
+All demo partners use password `Demo@1234`.
+
+| Company | Email | Focus |
+| --- | --- | --- |
+| RetailSync Pro | `api@retailsync-demo.io` | Retail |
+| GlobalTrade Logistics | `api@globaltrade-demo.io` | Logistics |
+| NexusPay Finance | `connect@nexuspay-demo.io` | Payments |
+| AgroSupply Chain | `edi@agrosupply-demo.io` | Agriculture |
+| MediCore Systems | `integration@medicore-demo.io` | Healthcare |
+
+### Admin account
+
+An admin user is created automatically on first startup.
 
 | Field | Default |
-|---|---|
+| --- | --- |
 | Username | `admin` |
-| Password | `admin1234` (set `ADMIN_PASSWORD` in `.env` to override) |
+| Password | `admin1234` |
 
-Login at `/login` — the portal redirects admins to `/admin` automatically.
+Change the default password before using the platform anywhere beyond local development.
 
-Admin capabilities:
-- Approve / reject / suspend partner registrations
-- Configure platform branding (white-label)
-- Toggle demo mode
-- Manage system settings (auto-approve, subscription limits)
-- Billing admin (plans, usage, invoices)
+## Operational notes
 
-> ⚠️ **Change the default admin password before going to production.**
+### Autonomous agents
 
----
+The agent orchestrator runs four scheduled agents:
 
-## Demo Mode
+| Agent | Responsibility |
+| --- | --- |
+| Monitor | Detects stuck messages and elevated error rates |
+| Retry | Re-attempts failed webhook deliveries |
+| Schema Change | Detects payload drift relative to registered schemas |
+| Alert | Surfaces dead-letter and schema-drift issues |
 
-Demo Mode seeds **5 pre-configured partner companies** with active subscriptions and messages across multiple formats — ideal for demos and testing.
+### API response shape
 
-### Activating Demo Mode
+Services return shared response types from `@bx/shared-types`.
 
-1. Sign in as admin → **Admin → System Settings**
-2. Toggle **Demo Mode** — data is seeded in one transaction
-3. Toggle off to cleanly remove all demo data
+Standard response shape:
 
-### Demo Partner Accounts
-
-All demo partners share the password **`Demo@1234`**:
-
-| Company | Email | Formats | Industry |
-|---|---|---|---|
-| **RetailSync Pro** | `api@retailsync-demo.io` | JSON, CSV, XML | Retail |
-| **GlobalTrade Logistics** | `api@globaltrade-demo.io` | JSON, XML, EDI X12 | Logistics |
-| **NexusPay Finance** | `connect@nexuspay-demo.io` | JSON, CSV | Payments |
-| **AgroSupply Chain** | `edi@agrosupply-demo.io` | EDI X12, EDIFACT, CSV | Agriculture |
-| **MediCore Systems** | `integration@medicore-demo.io` | XML, JSON | Healthcare |
-
-### Pre-configured Integration Flows
-
-```
-RetailSync Pro ──────────────────► GlobalTrade Logistics   (JSON order, XML shipment, JSON invoice)
-GlobalTrade Logistics ───────────► NexusPay Finance        (JSON payment, CSV remittance)
-MediCore Systems ────────────────► AgroSupply Chain        (EDI X12 PO, XML invoice)
-NexusPay Finance ────────────────► RetailSync Pro          (JSON invoice)
-AgroSupply Chain ────────────────► GlobalTrade Logistics   (EDIFACT shipment notice)
+```ts
+{ success: boolean; data?: T; error?: string; message?: string }
 ```
 
-### Demo Walkthrough
+Paginated endpoints extend this with metadata such as `total`, `page`, and `pageSize`.
 
-1. Sign in as `api@retailsync-demo.io` → explore dashboard, messages, subscriptions
-2. Go to **Integration Hub** → see readiness checklist + delivery health per partner
-3. Go to **Schema Mapping** → view auto-mapped schemas, validate integration with a partner
-4. Sign in as admin → approve/manage partners, configure branding
+### Package import convention
 
----
+Cross-package imports should always use workspace aliases:
 
-## Key API Flows
-
-All examples use `http://localhost:11000` (or your gateway URL).
-
-### Register as a Partner
-```bash
-curl -X POST http://localhost:11000/api/partners \
-  -H "Content-Type: application/json" \
-  -d '{"name":"Acme Corp","domain":"acme.com","contactEmail":"api@acme.com","password":"secret123","supportedFormats":["json","xml"]}'
+```ts
+import { createLogger } from '@bx/logger';
+import { generateId } from '@bx/shared-utils';
+import type { ApiResponse } from '@bx/shared-types';
 ```
 
-### Login
-```bash
-curl -X POST http://localhost:11000/api/auth/login \
-  -H "Content-Type: application/json" \
-  -d '{"email":"api@acme.com","password":"secret123"}'
-# → { "data": { "accessToken": "...", "refreshToken": "..." } }
-```
+## Troubleshooting
 
-### Discover & Subscribe to a Partner
-```bash
-curl http://localhost:11000/api/subscriptions/discover -H "Authorization: Bearer <token>"
+### The portal loads but API calls fail
 
-curl -X POST http://localhost:11000/api/subscriptions \
-  -H "Authorization: Bearer <token>" \
-  -H "Content-Type: application/json" \
-  -d '{"providerPartnerId":"<uuid>"}'
-```
+Check:
 
-### Register a Schema (AI auto-maps it)
-```bash
-curl -X POST http://localhost:11000/api/mappings/schemas \
-  -H "Authorization: Bearer <token>" \
-  -H "Content-Type: application/json" \
-  -d '{"format":"json","messageType":"ORDERS","samplePayload":"{\"orderId\":\"ORD-001\",\"total\":99.99}"}'
-```
+- gateway is running on `11000`
+- `NEXT_PUBLIC_API_URL` points to the gateway
+- your auth token is present and valid
 
-### Send a Message
-```bash
-curl -X POST http://localhost:11000/api/integrations/messages \
-  -H "Authorization: Bearer <token>" \
-  -H "Content-Type: application/json" \
-  -H "X-Target-Partner-Id: <partner-uuid>" \
-  -d '{"orderId":"ORD-001","total":99.99}'
-```
+### Docker services start but mapping does not work
 
----
+Check:
 
-## Project Structure
+- `AI_PROVIDER` is set correctly
+- the corresponding AI provider credentials are present
+- `MAPPING_ENGINE_URL` resolves correctly for the environment you are using
 
-```
-business-exchange/
-├── apps/
-│   ├── gateway/              # API Gateway — entry point for all traffic
-│   ├── auth-service/         # JWT · refresh tokens · OAuth2 · API keys
-│   ├── partner-service/      # Partner registration · KYB · branding API
-│   ├── subscription-service/ # Partner discovery · subscription lifecycle
-│   ├── integration-service/  # Message routing · webhook delivery · retry · validation handshake
-│   ├── mapping-engine/       # AI schema inference (pluggable) · JSONata transforms
-│   ├── agent-orchestrator/   # Cron-based autonomous agents
-│   ├── billing-service/      # Plans · usage · invoices
-│   └── partner-portal/       # Next.js 15 UI (React 19 + Tailwind)
-│       └── src/app/
-│           ├── dashboard/    # Overview stats
-│           ├── partners/     # Partner catalog + discovery
-│           ├── subscriptions/# Subscription management
-│           ├── hub/          # Integration Hub — per-partner readiness
-│           ├── integrations/ # Message monitor
-│           ├── mappings/     # Schema mapping (AI auto-map, validate, CDM test)
-│           ├── agents/       # Agent Monitor
-│           ├── settings/     # Partner settings + branding
-│           └── admin/        # Admin settings, branding, demo mode, billing
-├── packages/
-│   ├── shared-types/         # TypeScript interfaces (Partner, Message, Subscription…)
-│   ├── shared-utils/         # UUID · HMAC signing · API key hashing · pagination
-│   ├── database/             # pg pool · schema migration · admin seed
-│   └── logger/               # Pino structured logger factory
-├── infra/
-│   ├── bicep/                # Azure Container Apps Bicep templates
-│   └── fly/                  # Fly.io setup script
-├── .github/workflows/
-│   ├── deploy-fly.yml        # CI/CD: deploy all services to Fly.io on push to main
-│   └── setup-fly.yml         # One-time: provision Fly apps, Postgres, secrets
-├── docker-compose.yml        # Full-stack local environment
-├── turbo.json                # Turborepo task graph
-└── package.json              # Workspace root
-```
+### Messages are delivered but mapping shows fallback
 
----
+That usually means:
 
-## Autonomous Agents
+- the mapping engine timed out
+- no applicable schema was available
+- the AI provider or credentials were misconfigured
 
-The **agent-orchestrator** runs four background agents on a schedule:
+Delivery status and mapping status are intentionally tracked separately.
 
-| Agent | Schedule | What it does |
-|---|---|---|
-| **Monitor** | Every 1 min | Detects stuck messages, tracks per-partner error rates |
-| **Retry** | Every 2 min | Retries failed webhook deliveries (3× exponential backoff) |
-| **Schema Change** | Every 30 min | Detects payload drift against registered schemas |
-| **Alert** | Every 5 min | Notifies on dead-lettered messages and schema drift events |
+### Lint behaves differently than expected
 
-View live agent status at **Agent Monitor** in the portal sidebar.
+The repository has a root lint command, but parts of the frontend ecosystem may still trigger first-run tooling setup depending on your local environment. If lint prompts for interactive configuration, finish that setup once and rerun the command.
 
----
+## Suggested first exploration path
 
-## Development Commands
+If you are new to the codebase, this order works well:
 
-```bash
-npm install                    # install all workspace dependencies
-npm run dev                    # run all services with hot-reload
-npm run build                  # build everything (Turbo — packages first)
-npm run typecheck              # type-check all packages
-npm run lint                   # lint all packages
+1. read this README
+2. start the stack with Docker Compose
+3. sign in to the partner portal
+4. explore `apps/gateway`, `apps/integration-service`, and `apps/mapping-engine`
+5. inspect shared contracts in `packages/shared-types`
+6. review seeded/demo flows in the partner portal
 
-cd apps/gateway && npm run dev # run a single service
+## License / usage
 
-# Apply DB schema manually (normally auto-applied by Docker)
-docker exec -i bx-postgres psql -U bx_user -d business_exchange \
-  < packages/database/migrations/001_schema.sql
-```
+No license text is documented in this README. Check repository settings or add a formal license file if this project is intended for broader distribution.
