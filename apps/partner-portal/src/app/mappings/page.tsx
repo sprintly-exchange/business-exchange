@@ -358,6 +358,7 @@ interface Schema {
   id: string; partnerId: string; format: string; messageType: string; status: string;
   isActive: boolean; mappingRules: MappingRule[]; version: number; createdAt: string;
   schemaDirection?: 'outbound' | 'inbound';
+  createdWithModel?: string;
 }
 interface SendTarget { partnerId: string; companyName: string }
 interface TransformResult { mappedPayload: string; rulesApplied: number; outputFormat: string; schemaId?: string }
@@ -542,7 +543,15 @@ function VersionRow({
             : <span className="inline-flex items-center gap-1 rounded-full bg-teal-100 text-teal-700 px-2 py-0.5 text-xs font-semibold"><ArrowRight className="w-3 h-3" />OUTBOUND</span>
           }
         </div>
-        <span className="text-xs text-gray-400 hidden sm:block">{schema.mappingRules.length} rules · {fmtDateTime(schema.createdAt)}</span>
+        <div className="hidden sm:flex flex-col items-end gap-1 text-right">
+          <span className="text-xs text-gray-400">{schema.mappingRules.length} rules · {fmtDateTime(schema.createdAt)}</span>
+          {schema.createdWithModel && (
+            <span className="inline-flex items-center gap-1 rounded-full bg-indigo-50 text-indigo-700 border border-indigo-100 px-2 py-0.5 text-xs font-medium">
+              <Cpu className="w-3 h-3" />
+              {schema.createdWithModel}
+            </span>
+          )}
+        </div>
         <div className="flex items-center gap-1.5 flex-shrink-0">
           {!schema.isActive && isApproved && (
             <Button size="sm" variant="secondary" onClick={onActivate}>

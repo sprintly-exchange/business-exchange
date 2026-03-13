@@ -1342,10 +1342,10 @@ export class DemoService {
 
         await client.query(
           `INSERT INTO schema_registry
-             (partner_id, format, message_type, schema_direction, sample_payload,
-              inferred_schema, mapping_rules, version, status, is_active, created_at, updated_at)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,1,$8,true,NOW(),NOW())
-           ON CONFLICT DO NOTHING`,
+              (partner_id, format, message_type, schema_direction, sample_payload,
+               inferred_schema, mapping_rules, version, status, is_active, created_with_model, created_at, updated_at)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,1,$8,true,$9,NOW(),NOW())
+            ON CONFLICT DO NOTHING`,
           [
             partnerId,
             schema.format,
@@ -1355,6 +1355,7 @@ export class DemoService {
             JSON.stringify(schema.inferredSchema),
             JSON.stringify(schema.mappingRules),
             status,
+            'demo-seeded',
           ]
         );
       }

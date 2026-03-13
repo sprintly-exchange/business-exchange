@@ -31,6 +31,7 @@ export class SchemaService {
   async register(partnerId: string, input: RegisterInput): Promise<SchemaRegistration> {
     const id = generateId();
     const direction: SchemaDirection = input.direction ?? 'outbound';
+    const model = getAIModel();
 
     // Auto-increment version per (partner_id, direction, format, message_type)
     const { rows: versionRows } = await this.db.query<{ max: number }>(
@@ -44,9 +45,9 @@ export class SchemaService {
     const status = mappingRules.every((r) => r.confidence >= 0.85) ? 'auto_approved' : 'pending_review';
 
     const { rows } = await this.db.query<Record<string, unknown>>(
-      `INSERT INTO schema_registry (id, partner_id, format, message_type, schema_direction, sample_payload, inferred_schema, mapping_rules, version, status, is_active, created_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, NOW()) RETURNING *`,
-      [id, partnerId, input.format, input.messageType, direction, input.samplePayload, JSON.stringify(inferredSchema), JSON.stringify(mappingRules), nextVersion, status, isActive]
+      `INSERT INTO schema_registry (id, partner_id, format, message_type, schema_direction, sample_payload, inferred_schema, mapping_rules, version, status, is_active, created_with_model, created_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, NOW()) RETURNING *`,
+      [id, partnerId, input.format, input.messageType, direction, input.samplePayload, JSON.stringify(inferredSchema), JSON.stringify(mappingRules), nextVersion, status, isActive, model]
     );
     return this.mapRow(rows[0]);
   }
@@ -213,6 +214,7 @@ Respond with valid JSON only:
       format: row['format'] as MessageFormat,
       messageType: (row['message_type'] as string) ?? 'custom',
       schemaDirection: (row['schema_direction'] as SchemaDirection) ?? 'outbound',
+      createdWithModel: row['created_with_model'] as string | undefined,
       samplePayload: row['sample_payload'] as string,
       inferredSchema: row['inferred_schema'] as Record<string, unknown>,
       mappingRules: row['mapping_rules'] as MappingRule[],

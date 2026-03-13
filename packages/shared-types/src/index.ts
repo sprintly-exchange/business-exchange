@@ -77,6 +77,7 @@ export interface SchemaRegistration {
   format: MessageFormat;
   messageType: string;
   schemaDirection: SchemaDirection;
+  createdWithModel?: string;
   samplePayload: string;
   inferredSchema: Record<string, unknown>;
   mappingRules: MappingRule[];
