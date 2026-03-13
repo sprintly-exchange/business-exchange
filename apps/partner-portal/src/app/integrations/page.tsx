@@ -1,7 +1,7 @@
 'use client';
 import { useEffect, useState, useCallback, useRef } from 'react';
 import { integrationsApi, subscriptionsApi, mappingsApi } from '@/lib/api';
-import { getPartnerId } from '@/lib/utils';
+import { getPartnerId, isAdmin } from '@/lib/utils';
 import { Badge, Card } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
 import { Textarea } from '@/components/ui/Input';
@@ -172,7 +172,7 @@ function LlmStageBlock({ stg }: {
 }
 
 /* ── Detail Panel ──────────────────────────────────────────────────────────── */
-function DetailPanel({ msg, myId, onClose }: { msg: Message; myId: string; onClose: () => void }) {
+function DetailPanel({ msg, myId, admin, onClose }: { msg: Message; myId: string; admin: boolean; onClose: () => void }) {
   const tryPretty = (s?: string) => {
     try { return JSON.stringify(JSON.parse(s ?? ''), null, 2); } catch { return s ?? '—'; }
   };
@@ -338,20 +338,33 @@ function DetailPanel({ msg, myId, onClose }: { msg: Message; myId: string; onClo
           )}
 
           {/* ── e) LLM Trace ──────────────────────────────────────────── */}
-          {msg.llmContext?.stages && msg.llmContext.stages.length > 0 && (
-            <div>
-              <div className="flex items-center gap-2 mb-3">
-                <Bot className="w-4 h-4 text-indigo-500" />
-                <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide">LLM Mapping Trace</p>
-                <span className="text-xs text-gray-400">({msg.llmContext.stages.length} stage{msg.llmContext.stages.length > 1 ? 's' : ''})</span>
+          {msg.llmContext?.stages && msg.llmContext.stages.length > 0 && (() => {
+            // Admins see all stages.
+            // Sender (A) sees only Stage 1 (their format → CDM).
+            // Receiver (B) sees only Stage 2 (CDM → their format).
+            const allStages = msg.llmContext.stages;
+            const visibleStages = admin
+              ? allStages
+              : msg.sourcePartnerId === myId
+                ? allStages.filter(s => s.stage === 1)
+                : allStages.filter(s => s.stage === 2);
+
+            if (visibleStages.length === 0) return null;
+            return (
+              <div>
+                <div className="flex items-center gap-2 mb-3">
+                  <Bot className="w-4 h-4 text-indigo-500" />
+                  <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide">LLM Mapping Trace</p>
+                  <span className="text-xs text-gray-400">({visibleStages.length} stage{visibleStages.length > 1 ? 's' : ''})</span>
+                </div>
+                <div className="space-y-2">
+                  {visibleStages.map((stg, i) => (
+                    <LlmStageBlock key={i} stg={stg} />
+                  ))}
+                </div>
               </div>
-              <div className="space-y-2">
-                {msg.llmContext.stages.map((stg, i) => (
-                  <LlmStageBlock key={i} stg={stg} />
-                ))}
-              </div>
-            </div>
-          )}
+            );
+          })()}
         </div>
       </div>
     </div>
@@ -741,6 +754,7 @@ function SendForm({ onSent }: { onSent: () => void }) {
 ══════════════════════════════════════════════════════════════════════════════ */
 export default function IntegrationsPage() {
   const myId = getPartnerId() ?? '';
+  const admin = isAdmin();
   const [messages, setMessages] = useState<Message[]>([]);
   const [total, setTotal] = useState(0);
   const [stats, setStats] = useState<Stats | null>(null);
@@ -817,7 +831,7 @@ export default function IntegrationsPage() {
 
   return (
     <div className="space-y-6">
-      {selected && <DetailPanel msg={selected} myId={myId} onClose={() => setSelected(null)} />}
+      {selected && <DetailPanel msg={selected} myId={myId} admin={admin} onClose={() => setSelected(null)} />}
 
       {/* Header */}
       <div className="flex items-center justify-between">
