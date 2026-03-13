@@ -18,7 +18,8 @@ interface RouteInput {
   payload: string;
 }
 
-interface MessageRow extends Message {
+interface MessageRow extends Omit<Message, 'rawPayload'> {
+  rawPayload?: string;
   sourcePartnerName?: string;
   targetPartnerName?: string;
   errorMessage?: string;
@@ -28,6 +29,11 @@ interface MessageRow extends Message {
   outputFormat?: string;
   cdmPayload?: string;
   llmContext?: Record<string, unknown>;
+}
+
+interface ViewerContext {
+  partnerId: string | null;
+  isAdmin: boolean;
 }
 
 export class MessageRouter {
@@ -188,16 +194,25 @@ export class MessageRouter {
     }
   }
 
-  async getStatus(messageId: string): Promise<Message | null> {
+  async getStatus(messageId: string, viewer: ViewerContext): Promise<MessageRow | null> {
     const { rows } = await this.db.query<Record<string, unknown>>(
-      'SELECT * FROM messages WHERE id = $1',
+      `SELECT m.*,
+              sp.name AS source_partner_name,
+              tp.name AS target_partner_name
+       FROM messages m
+       LEFT JOIN partners sp ON sp.id = m.source_partner_id
+       LEFT JOIN partners tp ON tp.id = m.target_partner_id
+       WHERE m.id = $1
+       LIMIT 1`,
       [messageId]
     );
-    return rows.length ? this.mapRow(rows[0]) : null;
+    if (!rows.length) return null;
+
+    return this.sanitizeMessageForViewer(this.mapRow(rows[0]), viewer);
   }
 
   async listForPartner(
-    partnerId: string | null,
+    viewer: ViewerContext,
     filters: {
       direction?: 'sent' | 'received' | 'all';
       status?: string;
@@ -210,13 +225,14 @@ export class MessageRouter {
     } = {}
   ): Promise<{ messages: MessageRow[]; total: number }> {
     const { direction = 'all', status, format, search, from, to, limit = 50, offset = 0 } = filters;
+    const { partnerId, isAdmin } = viewer;
 
     const conditions: string[] = [];
     const params: unknown[] = [];
     let p = 1;
 
     // null partnerId = admin — show all messages with no partner filter
-    if (partnerId) {
+    if (!isAdmin && partnerId) {
       params.push(partnerId);
       if (direction === 'sent') {
         conditions.push(`source_partner_id = $${p++}`);
@@ -251,10 +267,14 @@ export class MessageRouter {
        LEFT JOIN partners tp ON tp.id = m.target_partner_id
        ${where}
        ORDER BY m.created_at DESC LIMIT $${p++} OFFSET $${p}`,
-      [...params, limit, offset]
-    );
+       [...params, limit, offset]
+     );
 
-    return { messages: rows.map((r) => this.mapRow(r)), total };
+    const messages = rows
+      .map((r) => this.sanitizeMessageForViewer(this.mapRow(r), viewer))
+      .filter((message): message is MessageRow => message !== null);
+
+    return { messages, total };
   }
 
   async getStats(partnerId: string | null): Promise<{
@@ -340,6 +360,45 @@ export class MessageRouter {
       schemaFormat: row['schema_format'] as string | undefined,
       outputFormat: row['output_format'] as string | undefined,
     };
+  }
+
+  private sanitizeMessageForViewer(message: MessageRow, viewer: ViewerContext): MessageRow | null {
+    if (viewer.isAdmin) return message;
+    if (!viewer.partnerId) return null;
+
+    const isSender = message.sourcePartnerId === viewer.partnerId;
+    const isReceiver = message.targetPartnerId === viewer.partnerId;
+
+    if (!isSender && !isReceiver) return null;
+
+    if (isSender) {
+      return {
+        ...message,
+        mappedPayload: undefined,
+        outputFormat: undefined,
+        llmContext: this.filterLLMContext(message.llmContext, 1),
+      };
+    }
+
+    return {
+      ...message,
+      rawPayload: undefined,
+      llmContext: this.filterLLMContext(message.llmContext, 2),
+    };
+  }
+
+  private filterLLMContext(
+    llmContext: Record<string, unknown> | undefined,
+    visibleStage: 1 | 2,
+  ): Record<string, unknown> | undefined {
+    const stagesValue = llmContext?.['stages'];
+    if (!Array.isArray(stagesValue)) return undefined;
+
+    const stages = stagesValue.filter((stage): stage is Record<string, unknown> => {
+      return typeof stage === 'object' && stage !== null && stage['stage'] === visibleStage;
+    });
+
+    return stages.length > 0 ? { ...llmContext, stages } : undefined;
   }
 
   /** Fetches a partner's decrypted LLM config via the partner-service internal API.

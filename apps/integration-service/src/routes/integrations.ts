@@ -8,6 +8,28 @@ const router = Router();
 const messageRouter = new MessageRouter();
 const validationService = new ValidationService();
 
+function getViewer(req: Request): { partnerId: string | null; isAdmin: boolean } {
+  const partnerIdHeader = req.headers['x-partner-id'];
+  const partnerId = typeof partnerIdHeader === 'string' && partnerIdHeader.length > 0
+    ? partnerIdHeader
+    : null;
+  const scopes = (req.headers['x-partner-scopes'] as string ?? '').split(',');
+
+  return { partnerId, isAdmin: scopes.includes('admin') };
+}
+
+function requireViewerIdentity(
+  res: Response,
+  viewer: { partnerId: string | null; isAdmin: boolean },
+): boolean {
+  if (!viewer.isAdmin && !viewer.partnerId) {
+    res.status(401).json({ success: false, error: 'Missing partner identity' });
+    return false;
+  }
+
+  return true;
+}
+
 // POST /api/integrations/messages — inbound message from partner
 router.post('/messages', async (req: Request, res: Response) => {
   const sourcePartnerId = req.headers['x-partner-id'] as string;
@@ -37,11 +59,10 @@ router.post('/messages', async (req: Request, res: Response) => {
 
 // GET /api/integrations/messages/stats — message statistics for partner (MUST be before /:id)
 router.get('/messages/stats', async (req: Request, res: Response) => {
-  const partnerId = req.headers['x-partner-id'] as string;
-  const scopes = (req.headers['x-partner-scopes'] as string ?? '').split(',');
-  const isAdmin = scopes.includes('admin');
+  const viewer = getViewer(req);
+  if (!requireViewerIdentity(res, viewer)) return;
   try {
-    const stats = await messageRouter.getStats(isAdmin ? null : partnerId);
+    const stats = await messageRouter.getStats(viewer.isAdmin ? null : viewer.partnerId);
     res.json({ success: true, data: stats });
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : 'Failed to get stats';
@@ -51,7 +72,10 @@ router.get('/messages/stats', async (req: Request, res: Response) => {
 
 // GET /api/integrations/messages/:id — check message status
 router.get('/messages/:id', async (req: Request, res: Response) => {
-  const msg = await messageRouter.getStatus(req.params.id);
+  const viewer = getViewer(req);
+  if (!requireViewerIdentity(res, viewer)) return;
+
+  const msg = await messageRouter.getStatus(req.params.id, viewer);
   if (!msg) {
     res.status(404).json({ success: false, error: 'Message not found' });
     return;
@@ -61,12 +85,11 @@ router.get('/messages/:id', async (req: Request, res: Response) => {
 
 // GET /api/integrations/messages — list messages for partner (admin sees all)
 router.get('/messages', async (req: Request, res: Response) => {
-  const partnerId = req.headers['x-partner-id'] as string;
-  const scopes = (req.headers['x-partner-scopes'] as string ?? '').split(',');
-  const isAdmin = scopes.includes('admin');
+  const viewer = getViewer(req);
+  if (!requireViewerIdentity(res, viewer)) return;
   const { direction, status, format, search, from, to, limit, offset } = req.query as Record<string, string>;
   try {
-    const result = await messageRouter.listForPartner(isAdmin ? null : partnerId, {
+    const result = await messageRouter.listForPartner(viewer, {
       direction: direction as 'sent' | 'received' | 'all' | undefined,
       status,
       format,

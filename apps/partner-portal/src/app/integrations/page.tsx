@@ -69,14 +69,45 @@ const FORMAT_COLORS: Record<string, string> = {
   edifact: 'bg-pink-100 text-pink-700',
 };
 
-function isEmptyCdm(mappedPayload?: string): boolean {
-  if (!mappedPayload) return true;
-  const t = mappedPayload.trim();
+function isEmptyPayload(payload?: string): boolean {
+  if (!payload) return true;
+  const t = payload.trim();
   return t === '{}' || t === '"{}"';
 }
 
 function fmtLabel(f: string) { return FORMAT_LABELS[f] ?? f.toUpperCase(); }
 function fmtColor(f: string) { return FORMAT_COLORS[f] ?? 'bg-gray-100 text-gray-600'; }
+
+function getMappingState(msg: Pick<Message, 'schemaId' | 'cdmPayload' | 'errorMessage'>): {
+  label: string;
+  className: string;
+} {
+  if (msg.errorMessage?.startsWith('Mapping warning:')) {
+    return {
+      label: 'Fallback',
+      className: 'bg-amber-50 text-amber-700 border border-amber-200',
+    };
+  }
+
+  if (!msg.schemaId) {
+    return {
+      label: 'As-is',
+      className: 'bg-gray-50 text-gray-500 border border-gray-200',
+    };
+  }
+
+  if (isEmptyPayload(msg.cdmPayload)) {
+    return {
+      label: 'Empty CDM',
+      className: 'bg-amber-50 text-amber-700 border border-amber-200',
+    };
+  }
+
+  return {
+    label: 'Mapped',
+    className: 'bg-green-50 text-green-700 border border-green-200',
+  };
+}
 
 /* ── Format badge shown in table rows ──────────────────────────────────────── */
 function FormatBadge({ format, outputFormat, schemaId }: { format: string; outputFormat?: string; schemaId?: string }) {
@@ -100,9 +131,9 @@ function FormatBadge({ format, outputFormat, schemaId }: { format: string; outpu
 }
 
 /* ── Mapping quality badge shown in table rows ─────────────────────────────── */
-function MappingBadge({ schemaId, mappedPayload }: { schemaId?: string; mappedPayload?: string }) {
+function MappingBadge({ schemaId, cdmPayload }: { schemaId?: string; cdmPayload?: string }) {
   if (!schemaId) return <span className="text-gray-300 text-xs">—</span>;
-  if (isEmptyCdm(mappedPayload)) {
+  if (isEmptyPayload(cdmPayload)) {
     return (
       <span className="inline-flex items-center gap-1 text-xs font-medium px-1.5 py-0.5 rounded bg-amber-50 text-amber-700 border border-amber-200">
         <AlertTriangle className="w-3 h-3" />Empty CDM
@@ -112,6 +143,16 @@ function MappingBadge({ schemaId, mappedPayload }: { schemaId?: string; mappedPa
   return (
     <span className="inline-flex items-center gap-1 text-xs font-medium px-1.5 py-0.5 rounded bg-green-50 text-green-700 border border-green-200">
       <Zap className="w-3 h-3" />Mapped
+    </span>
+  );
+}
+
+function MappingStatusBadge({ msg }: { msg: Pick<Message, 'schemaId' | 'cdmPayload' | 'errorMessage'> }) {
+  const mappingState = getMappingState(msg);
+  return (
+    <span className={cn('inline-flex items-center gap-1 text-xs font-medium px-2 py-0.5 rounded', mappingState.className)}>
+      {mappingState.label === 'Fallback' ? <AlertTriangle className="w-3 h-3" /> : <Zap className="w-3 h-3" />}
+      {mappingState.label}
     </span>
   );
 }
@@ -173,20 +214,45 @@ function LlmStageBlock({ stg }: {
 }
 
 /* ── Detail Panel ──────────────────────────────────────────────────────────── */
-function DetailPanel({ msg, myId, admin, onClose }: { msg: Message; myId: string; admin: boolean; onClose: () => void }) {
+function DetailPanel({
+  msg,
+  myId,
+  admin,
+  onClose,
+  onResend,
+}: {
+  msg: Message;
+  myId: string;
+  admin: boolean;
+  onClose: () => void;
+  onResend: (msg: Message) => Promise<string | undefined>;
+}) {
   const tryPretty = (s?: string) => {
     try { return JSON.stringify(JSON.parse(s ?? ''), null, 2); } catch { return s ?? '—'; }
   };
+  const [resending, setResending] = useState(false);
+  const [resendResult, setResendResult] = useState<{ ok: boolean; text: string } | null>(null);
   const displayStatus = (status: string) =>
     status === 'delivered' && msg.targetPartnerId === myId ? 'received' : status;
+  const senderView = !admin && msg.sourcePartnerId === myId;
+  const visibleCdmPayload = msg.cdmPayload;
+  const visibleDeliveredPayload = admin || !senderView ? msg.mappedPayload : undefined;
+  const visibleRawPayload = admin || senderView ? msg.rawPayload : undefined;
 
-  const hasFormatTransform = !!msg.schemaId && !!msg.outputFormat && msg.outputFormat !== msg.format;
-  const emptyCdm = isEmptyCdm(msg.mappedPayload);
   const hasMappingWarning = msg.errorMessage?.startsWith('Mapping warning:');
+  const hasMapping = !!msg.schemaId;
+  const hasFailedMappingAttempt = hasMappingWarning && !hasMapping;
+  const hasFormatTransform = hasMapping && !!msg.outputFormat && msg.outputFormat !== msg.format;
+  const emptyCdm = isEmptyPayload(visibleCdmPayload);
+  const hasVisibleCdm = !!visibleCdmPayload && visibleCdmPayload !== msg.rawPayload;
+  const hasVisibleDeliveredPayload = !!visibleDeliveredPayload
+    && visibleDeliveredPayload !== msg.rawPayload
+    && visibleDeliveredPayload !== visibleCdmPayload;
+  const mappingState = getMappingState(msg);
 
   let cdmFieldCount = 0;
-  if (!emptyCdm && msg.mappedPayload) {
-    try { cdmFieldCount = Object.keys(JSON.parse(msg.mappedPayload)).length; } catch {}
+  if (!emptyCdm && visibleCdmPayload) {
+    try { cdmFieldCount = Object.keys(JSON.parse(visibleCdmPayload)).length; } catch {}
   }
 
   return (
@@ -206,15 +272,39 @@ function DetailPanel({ msg, myId, admin, onClose }: { msg: Message; myId: string
               <span className={cn('font-mono text-sm font-semibold px-2.5 py-1 rounded-lg', fmtColor(msg.format))}>
                 {fmtLabel(msg.format)}
               </span>
-              {hasFormatTransform ? (
+              {hasMapping ? (
+                senderView ? (
+                  <>
+                    <span className="text-gray-400 text-xs">→</span>
+                    <span className="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded bg-indigo-100 text-indigo-700 font-medium">
+                      <Zap className="w-3 h-3" />CDM
+                    </span>
+                  </>
+                ) : (
+                  <>
+                    <span className="text-gray-400 text-xs">→</span>
+                    <span className="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded bg-indigo-100 text-indigo-700 font-medium">
+                      <Zap className="w-3 h-3" />CDM
+                    </span>
+                    {msg.outputFormat && (
+                      <>
+                        <span className="text-gray-400 text-xs">→</span>
+                        <span className={cn('font-mono text-sm font-semibold px-2.5 py-1 rounded-lg', fmtColor(msg.outputFormat))}>
+                          {fmtLabel(msg.outputFormat)}
+                        </span>
+                      </>
+                    )}
+                  </>
+                )
+              ) : hasFailedMappingAttempt ? (
                 <>
                   <span className="text-gray-400 text-xs">→</span>
-                  <span className="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded bg-indigo-100 text-indigo-700 font-medium">
-                    <Zap className="w-3 h-3" />CDM
+                  <span className="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded bg-amber-100 text-amber-700 font-medium">
+                    <AlertTriangle className="w-3 h-3" />Mapping fallback
                   </span>
                   <span className="text-gray-400 text-xs">→</span>
-                  <span className={cn('font-mono text-sm font-semibold px-2.5 py-1 rounded-lg', fmtColor(msg.outputFormat!))}>
-                    {fmtLabel(msg.outputFormat!)}
+                  <span className={cn('font-mono text-sm font-semibold px-2.5 py-1 rounded-lg', fmtColor(msg.format))}>
+                    {fmtLabel(msg.format)}
                   </span>
                 </>
               ) : (
@@ -237,11 +327,12 @@ function DetailPanel({ msg, myId, admin, onClose }: { msg: Message; myId: string
 
           {/* ── Core meta grid ─────────────────────────────────────────── */}
           <div className="grid grid-cols-2 gap-3">
-            <div><p className="text-xs text-gray-400 mb-0.5">Message ID</p><p className="font-mono text-xs text-gray-700 break-all">{msg.id}</p></div>
-            <div><p className="text-xs text-gray-400 mb-0.5">Status</p><Badge label={displayStatus(msg.status)} className={statusColor(msg.status)} /></div>
-            <div><p className="text-xs text-gray-400 mb-0.5">Retries</p><p className="text-gray-700">{msg.retries}</p></div>
-            <div><p className="text-xs text-gray-400 mb-0.5">Sent at</p><p className="text-gray-700 text-xs">{fmtDateTime(msg.createdAt)}</p></div>
-            <div><p className="text-xs text-gray-400 mb-0.5">Updated at</p><p className="text-gray-700 text-xs">{fmtDateTime(msg.updatedAt)}</p></div>
+              <div><p className="text-xs text-gray-400 mb-0.5">Message ID</p><p className="font-mono text-xs text-gray-700 break-all">{msg.id}</p></div>
+              <div><p className="text-xs text-gray-400 mb-0.5">Status</p><Badge label={displayStatus(msg.status)} className={statusColor(msg.status)} /></div>
+              <div><p className="text-xs text-gray-400 mb-0.5">Mapping Status</p><MappingStatusBadge msg={msg} /></div>
+              <div><p className="text-xs text-gray-400 mb-0.5">Retries</p><p className="text-gray-700">{msg.retries}</p></div>
+              <div><p className="text-xs text-gray-400 mb-0.5">Sent at</p><p className="text-gray-700 text-xs">{fmtDateTime(msg.createdAt)}</p></div>
+              <div><p className="text-xs text-gray-400 mb-0.5">Updated at</p><p className="text-gray-700 text-xs">{fmtDateTime(msg.updatedAt)}</p></div>
             <div className="col-span-2"><p className="text-xs text-gray-400 mb-0.5">From (Sender)</p><p className="font-semibold text-gray-800">{msg.sourcePartnerName ?? '—'}</p><p className="font-mono text-xs text-gray-400 break-all">{msg.sourcePartnerId}</p></div>
             <div className="col-span-2"><p className="text-xs text-gray-400 mb-0.5">To (Receiver)</p><p className="font-semibold text-gray-800">{msg.targetPartnerName ?? '—'}</p><p className="font-mono text-xs text-gray-400 break-all">{msg.targetPartnerId}</p></div>
           </div>
@@ -258,27 +349,59 @@ function DetailPanel({ msg, myId, admin, onClose }: { msg: Message; myId: string
                   <div><span className="text-gray-400">Schema ID</span><p className="font-mono text-gray-700">{msg.schemaId.slice(0, 12)}…</p></div>
                   <div><span className="text-gray-400">Version</span><p className="text-gray-700">v{msg.schemaVersion ?? '?'}</p></div>
                   <div><span className="text-gray-400">Schema Format</span><p className="font-mono text-gray-700">{(msg.schemaFormat ?? msg.format).toUpperCase()}</p></div>
-                  <div><span className="text-gray-400">Output Format</span><p className="font-mono text-gray-700">{msg.format.toUpperCase()}</p></div>
+                  <div><span className="text-gray-400">Visible Output</span><p className="font-mono text-gray-700">{senderView ? 'CDM' : (msg.outputFormat ?? msg.format).toUpperCase()}</p></div>
                 </div>
-                {emptyCdm ? (
-                  <div className="mt-2 bg-amber-50 border border-amber-200 rounded-lg p-3 flex gap-2">
-                    <AlertTriangle className="w-4 h-4 text-amber-500 mt-0.5 shrink-0" />
-                    <div>
-                      <p className="text-xs font-semibold text-amber-700 mb-1">⚠ CDM output is empty</p>
-                      <p className="text-xs text-amber-600">
-                        All mapping rules failed to match. Check that your schema was registered with a sample payload
-                        matching this message format. The payload was delivered as-is.
+                {hasVisibleCdm ? (
+                  emptyCdm ? (
+                    <div className="mt-2 bg-amber-50 border border-amber-200 rounded-lg p-3 flex gap-2">
+                      <AlertTriangle className="w-4 h-4 text-amber-500 mt-0.5 shrink-0" />
+                      <div>
+                        <p className="text-xs font-semibold text-amber-700 mb-1">⚠ CDM output is empty</p>
+                        <p className="text-xs text-amber-600">
+                          All mapping rules failed to match. Check that your schema was registered with a sample payload
+                          matching this message format. The payload was delivered as-is.
+                        </p>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="mt-2 bg-green-50 border border-green-200 rounded-lg p-2.5 flex gap-2 items-center">
+                      <CheckCircle className="w-4 h-4 text-green-500 shrink-0" />
+                      <p className="text-xs text-green-700 font-medium">
+                        ✓ CDM mapping produced {cdmFieldCount} field{cdmFieldCount !== 1 ? 's' : ''}
                       </p>
                     </div>
-                  </div>
+                  )
                 ) : (
                   <div className="mt-2 bg-green-50 border border-green-200 rounded-lg p-2.5 flex gap-2 items-center">
                     <CheckCircle className="w-4 h-4 text-green-500 shrink-0" />
                     <p className="text-xs text-green-700 font-medium">
-                      ✓ CDM mapping produced {cdmFieldCount} field{cdmFieldCount !== 1 ? 's' : ''}
+                      ✓ Delivery payload prepared for {fmtLabel(msg.outputFormat ?? msg.format)}
                     </p>
                   </div>
                 )}
+              </div>
+            </div>
+          ) : hasFailedMappingAttempt ? (
+            <div className="border border-amber-200 rounded-lg overflow-hidden">
+              <div className="px-4 py-2.5 bg-amber-50 flex items-center gap-2">
+                <AlertTriangle className="w-4 h-4 text-amber-500" />
+                <span className="text-xs font-semibold text-amber-700 uppercase tracking-wide">Mapping Diagnosis</span>
+              </div>
+              <div className="px-4 py-3 space-y-2">
+                <div className="grid grid-cols-2 gap-2 text-xs">
+                  <div><span className="text-gray-400">Mapping Status</span><p className="text-amber-700 font-medium">Attempted but timed out</p></div>
+                  <div><span className="text-gray-400">Visible Output</span><p className="font-mono text-gray-700">{msg.format.toUpperCase()}</p></div>
+                </div>
+                <div className="mt-2 bg-amber-50 border border-amber-200 rounded-lg p-3 flex gap-2">
+                  <AlertTriangle className="w-4 h-4 text-amber-500 mt-0.5 shrink-0" />
+                  <div>
+                    <p className="text-xs font-semibold text-amber-700 mb-1">⚠ Mapping attempt fell back to the original payload</p>
+                    <p className="text-xs text-amber-600">
+                      The mapping service did not finish in time, so no transformed payload was recorded and the original
+                      payload was delivered as-is.
+                    </p>
+                  </div>
+                </div>
               </div>
             </div>
           ) : (
@@ -303,37 +426,100 @@ function DetailPanel({ msg, myId, admin, onClose }: { msg: Message; myId: string
               <div>
                 <p className="text-xs font-semibold text-amber-700 mb-0.5">Mapping Warning</p>
                 <p className="text-xs text-amber-600 break-all">{msg.errorMessage}</p>
+                <p className="text-xs text-amber-700 mt-2">
+                  {senderView
+                    ? 'You can resend the original payload after checking the mapping setup or retrying later.'
+                    : 'The sender can resend the original payload after checking the mapping setup or retrying later.'}
+                </p>
               </div>
             </div>
           )}
 
-          {/* ── d) Payload sections ─────────────────────────────────────── */}
-          <div>
-            <div className="flex items-center justify-between mb-2">
-              <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Raw Payload (Original)</p>
-              {hasFormatTransform && (
-                <span className="text-xs text-indigo-500 font-medium">Source: {fmtLabel(msg.format)}</span>
-              )}
+          {senderView && hasMappingWarning && (
+            <div className="flex items-center justify-between gap-3 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3">
+              <div>
+                <p className="text-sm font-medium text-amber-800">Resend original payload</p>
+                <p className="text-xs text-amber-700">
+                  This creates a new message using the same target and raw payload.
+                </p>
+              </div>
+              <Button
+                type="button"
+                size="sm"
+                loading={resending}
+                onClick={async () => {
+                  setResending(true);
+                  setResendResult(null);
+                  try {
+                    const resentId = await onResend(msg);
+                    setResendResult({
+                      ok: true,
+                      text: `Resent successfully${resentId ? ` — new ID: ${resentId}` : ''}`,
+                    });
+                  } catch (err: unknown) {
+                    const errorMessage = (err as { message?: string }).message ?? 'Failed to resend message';
+                    setResendResult({ ok: false, text: errorMessage });
+                  } finally {
+                    setResending(false);
+                  }
+                }}
+              >
+                <RefreshCw className="w-3.5 h-3.5 mr-1.5" />
+                Resend
+              </Button>
             </div>
-            <pre className="bg-gray-50 border border-gray-200 rounded-lg p-3 text-xs overflow-auto max-h-60 whitespace-pre-wrap">
-              {tryPretty(msg.rawPayload)}
-            </pre>
-          </div>
-          {msg.mappedPayload && msg.mappedPayload !== msg.rawPayload && (
+          )}
+
+          {resendResult && (
+            <div className={cn(
+              'text-sm px-3 py-2 rounded-lg border',
+              resendResult.ok ? 'bg-green-50 border-green-200 text-green-800' : 'bg-red-50 border-red-200 text-red-700',
+            )}>
+              {resendResult.text}
+            </div>
+          )}
+
+          {/* ── d) Payload sections ─────────────────────────────────────── */}
+          {visibleRawPayload && (
+            <div>
+              <div className="flex items-center justify-between mb-2">
+                <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Raw Payload (Original)</p>
+                {hasFormatTransform && (
+                  <span className="text-xs text-indigo-500 font-medium">Source: {fmtLabel(msg.format)}</span>
+                )}
+              </div>
+              <pre className="bg-gray-50 border border-gray-200 rounded-lg p-3 text-xs overflow-auto max-h-60 whitespace-pre-wrap">
+                {tryPretty(visibleRawPayload)}
+              </pre>
+            </div>
+          )}
+          {hasVisibleCdm && (
             <div>
               <div className="flex items-center justify-between mb-2">
                 <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Mapped Payload (CDM Output)</p>
+              </div>
+              <pre className={cn(
+                'border rounded-lg p-3 text-xs overflow-auto max-h-60 whitespace-pre-wrap',
+                emptyCdm ? 'bg-amber-50 border-amber-200' : 'bg-indigo-50 border-indigo-100',
+              )}>
+                {tryPretty(visibleCdmPayload)}
+              </pre>
+            </div>
+          )}
+          {hasVisibleDeliveredPayload && (
+            <div>
+              <div className="flex items-center justify-between mb-2">
+                <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide">
+                  {admin ? 'Transformed Payload (Receiver Output)' : 'Delivered Payload (Your Format)'}
+                </p>
                 {hasFormatTransform && (
                   <span className="text-xs text-green-600 font-medium flex items-center gap-1">
                     <Zap className="w-3 h-3" />Transformed → {fmtLabel(msg.outputFormat ?? msg.format)}
                   </span>
                 )}
               </div>
-              <pre className={cn(
-                'border rounded-lg p-3 text-xs overflow-auto max-h-60 whitespace-pre-wrap',
-                emptyCdm ? 'bg-amber-50 border-amber-200' : 'bg-indigo-50 border-indigo-100',
-              )}>
-                {tryPretty(msg.mappedPayload)}
+              <pre className="border rounded-lg p-3 text-xs overflow-auto max-h-60 whitespace-pre-wrap bg-emerald-50 border-emerald-100">
+                {tryPretty(visibleDeliveredPayload)}
               </pre>
             </div>
           )}
@@ -832,7 +1018,21 @@ export default function IntegrationsPage() {
 
   return (
     <div className="space-y-6">
-      {selected && <DetailPanel msg={selected} myId={myId} admin={admin} onClose={() => setSelected(null)} />}
+      {selected && (
+        <DetailPanel
+          msg={selected}
+          myId={myId}
+          admin={admin}
+          onClose={() => setSelected(null)}
+          onResend={async (message) => {
+            const body = message.format === 'json' ? JSON.parse(message.rawPayload ?? '{}') : (message.rawPayload ?? '');
+            const response = await integrationsApi.sendMessage(message.targetPartnerId, body, message.format);
+            const data = response.data as { data?: { messageId?: string } };
+            await load();
+            return data.data?.messageId;
+          }}
+        />
+      )}
 
       {/* Header */}
       <div className="flex items-center justify-between">
@@ -957,19 +1157,22 @@ export default function IntegrationsPage() {
                     <td className="px-4 py-3">
                       <FormatBadge format={m.format} outputFormat={m.outputFormat} schemaId={m.schemaId} />
                     </td>
-                    <td className="px-4 py-3">
-                      <Badge
-                        label={m.status === 'delivered' && m.targetPartnerId === myId ? 'received' : m.status}
-                        className={statusColor(m.status)}
-                      />
-                      {m.status === 'failed' && m.errorMessage && (
-                        <p className="text-xs text-red-500 mt-0.5 max-w-[160px] truncate" title={m.errorMessage}>
-                          {m.errorMessage.slice(0, 60)}{m.errorMessage.length > 60 ? '…' : ''}
+                     <td className="px-4 py-3">
+                       <Badge
+                         label={m.status === 'delivered' && m.targetPartnerId === myId ? 'received' : m.status}
+                         className={statusColor(m.status)}
+                       />
+                       <div className="mt-1">
+                         <MappingStatusBadge msg={m} />
+                       </div>
+                       {m.status === 'failed' && m.errorMessage && (
+                         <p className="text-xs text-red-500 mt-0.5 max-w-[160px] truncate" title={m.errorMessage}>
+                           {m.errorMessage.slice(0, 60)}{m.errorMessage.length > 60 ? '…' : ''}
                         </p>
                       )}
                     </td>
                     <td className="px-4 py-3">
-                      <MappingBadge schemaId={m.schemaId} mappedPayload={m.mappedPayload} />
+                      <MappingBadge schemaId={m.schemaId} cdmPayload={m.cdmPayload} />
                     </td>
                     <td className="px-4 py-3 text-gray-500">{m.retries}</td>
                     <td className="px-4 py-3 text-gray-400 text-xs whitespace-nowrap">{fmtDateTime(m.createdAt)}</td>

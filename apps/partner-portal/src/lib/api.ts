@@ -138,7 +138,7 @@ export const integrationsApi = {
   },
   getMessage: (id: string) => api.get(`/api/integrations/messages/${id}`),
   getStats: () => api.get('/api/integrations/messages/stats'),
-  sendMessage: (targetPartnerId: string, payload: object, format = 'json') =>
+  sendMessage: (targetPartnerId: string, payload: unknown, format = 'json') =>
     api.post('/api/integrations/messages', payload, {
       headers: { 'x-target-partner-id': targetPartnerId, 'Content-Type': `application/${format}` },
     }),
