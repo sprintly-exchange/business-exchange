@@ -16,10 +16,13 @@ if [[ ! -f "$ENV_FILE" ]]; then
 fi
 
 # Load vars (skip blank lines and comments)
+_TMP_ENV=$(mktemp)
+grep -v '^\s*#' "$ENV_FILE" | grep -v '^\s*$' > "$_TMP_ENV"
 set -o allexport
 # shellcheck disable=SC1090
-source <(grep -v '^\s*#' "$ENV_FILE" | grep -v '^\s*$')
+source "$_TMP_ENV"
 set +o allexport
+rm -f "$_TMP_ENV"
 
 # ── Defaults ──────────────────────────────────────────────────────────────────
 ORG="${FLY_ORG:-personal}"
