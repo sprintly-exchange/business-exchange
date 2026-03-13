@@ -20,6 +20,7 @@ interface MessageRow extends Message {
   schemaId?: string;
   schemaVersion?: number;
   schemaFormat?: string;
+  outputFormat?: string;
   cdmPayload?: string;
   llmContext?: Record<string, unknown>;
 }
@@ -85,7 +86,7 @@ export class MessageRouter {
           schemaId = mapRes.data.data.schemaId;
           await this.db.query(
             `UPDATE messages
-             SET mapped_payload = $2, cdm_payload = $3, schema_id = $4, format = $5,
+             SET mapped_payload = $2, cdm_payload = $3, schema_id = $4, output_format = $5,
                  llm_context = $6, updated_at = NOW()
              WHERE id = $1`,
             [
@@ -293,6 +294,7 @@ export class MessageRouter {
       schemaId: row['schema_id'] as string | undefined,
       schemaVersion: row['schema_version'] as number | undefined,
       schemaFormat: row['schema_format'] as string | undefined,
+      outputFormat: row['output_format'] as string | undefined,
     };
   }
 }

@@ -14,3 +14,7 @@ ALTER TABLE messages
 -- Add schema_id column to reference the applied schema mapping
 ALTER TABLE messages
   ADD COLUMN IF NOT EXISTS schema_id UUID REFERENCES schema_registry(id) ON DELETE SET NULL;
+
+-- Add output_format to track the format AFTER mapping (format column retains original input format)
+ALTER TABLE messages
+  ADD COLUMN IF NOT EXISTS output_format VARCHAR(50);

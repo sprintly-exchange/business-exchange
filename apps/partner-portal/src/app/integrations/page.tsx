@@ -36,6 +36,7 @@ interface Message {
   schemaId?: string;
   schemaVersion?: number;
   schemaFormat?: string;
+  outputFormat?: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -78,20 +79,20 @@ function fmtLabel(f: string) { return FORMAT_LABELS[f] ?? f.toUpperCase(); }
 function fmtColor(f: string) { return FORMAT_COLORS[f] ?? 'bg-gray-100 text-gray-600'; }
 
 /* ── Format badge shown in table rows ──────────────────────────────────────── */
-function FormatBadge({ format, schemaFormat, schemaId }: { format: string; schemaFormat?: string; schemaId?: string }) {
-  if (schemaId && schemaFormat && schemaFormat !== format) {
+function FormatBadge({ format, outputFormat, schemaId }: { format: string; outputFormat?: string; schemaId?: string }) {
+  if (schemaId && outputFormat && outputFormat !== format) {
     return (
       <span className="flex items-center gap-1 flex-wrap">
-        <span className={cn('font-mono text-xs px-1.5 py-0.5 rounded', fmtColor(schemaFormat))}>{fmtLabel(schemaFormat)}</span>
-        <span className="text-gray-400 text-xs">→</span>
         <span className={cn('font-mono text-xs px-1.5 py-0.5 rounded', fmtColor(format))}>{fmtLabel(format)}</span>
+        <span className="text-gray-400 text-xs">→</span>
+        <span className={cn('font-mono text-xs px-1.5 py-0.5 rounded', fmtColor(outputFormat))}>{fmtLabel(outputFormat)}</span>
       </span>
     );
   }
   if (schemaId) {
     return (
       <span className={cn('font-mono text-xs px-1.5 py-0.5 rounded inline-flex items-center gap-1', fmtColor(format))}>
-        <Zap className="w-3 h-3" />{fmtLabel(format)}
+        <Zap className="w-3 h-3" />{fmtLabel(outputFormat ?? format)}
       </span>
     );
   }
@@ -179,7 +180,7 @@ function DetailPanel({ msg, myId, admin, onClose }: { msg: Message; myId: string
   const displayStatus = (status: string) =>
     status === 'delivered' && msg.targetPartnerId === myId ? 'received' : status;
 
-  const hasFormatTransform = !!msg.schemaId && !!msg.schemaFormat && msg.schemaFormat !== msg.format;
+  const hasFormatTransform = !!msg.schemaId && !!msg.outputFormat && msg.outputFormat !== msg.format;
   const emptyCdm = isEmptyCdm(msg.mappedPayload);
   const hasMappingWarning = msg.errorMessage?.startsWith('Mapping warning:');
 
@@ -202,8 +203,8 @@ function DetailPanel({ msg, myId, admin, onClose }: { msg: Message; myId: string
           <div className="border border-gray-100 rounded-lg p-4 bg-gray-50">
             <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-3">Format Flow</p>
             <div className="flex items-center gap-2 flex-wrap">
-              <span className={cn('font-mono text-sm font-semibold px-2.5 py-1 rounded-lg', fmtColor(msg.schemaFormat ?? msg.format))}>
-                {fmtLabel(msg.schemaFormat ?? msg.format)}
+              <span className={cn('font-mono text-sm font-semibold px-2.5 py-1 rounded-lg', fmtColor(msg.format))}>
+                {fmtLabel(msg.format)}
               </span>
               {hasFormatTransform ? (
                 <>
@@ -212,8 +213,8 @@ function DetailPanel({ msg, myId, admin, onClose }: { msg: Message; myId: string
                     <Zap className="w-3 h-3" />CDM
                   </span>
                   <span className="text-gray-400 text-xs">→</span>
-                  <span className={cn('font-mono text-sm font-semibold px-2.5 py-1 rounded-lg', fmtColor(msg.format))}>
-                    {fmtLabel(msg.format)}
+                  <span className={cn('font-mono text-sm font-semibold px-2.5 py-1 rounded-lg', fmtColor(msg.outputFormat!))}>
+                    {fmtLabel(msg.outputFormat!)}
                   </span>
                 </>
               ) : (
@@ -311,7 +312,7 @@ function DetailPanel({ msg, myId, admin, onClose }: { msg: Message; myId: string
             <div className="flex items-center justify-between mb-2">
               <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Raw Payload (Original)</p>
               {hasFormatTransform && (
-                <span className="text-xs text-indigo-500 font-medium">Source: {fmtLabel(msg.schemaFormat!)}</span>
+                <span className="text-xs text-indigo-500 font-medium">Source: {fmtLabel(msg.format)}</span>
               )}
             </div>
             <pre className="bg-gray-50 border border-gray-200 rounded-lg p-3 text-xs overflow-auto max-h-60 whitespace-pre-wrap">
@@ -324,7 +325,7 @@ function DetailPanel({ msg, myId, admin, onClose }: { msg: Message; myId: string
                 <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Mapped Payload (CDM Output)</p>
                 {hasFormatTransform && (
                   <span className="text-xs text-green-600 font-medium flex items-center gap-1">
-                    <Zap className="w-3 h-3" />Transformed → {fmtLabel(msg.format)}
+                    <Zap className="w-3 h-3" />Transformed → {fmtLabel(msg.outputFormat ?? msg.format)}
                   </span>
                 )}
               </div>
@@ -954,7 +955,7 @@ export default function IntegrationsPage() {
                       {m.targetPartnerName ?? m.targetPartnerId.slice(0, 8) + '…'}
                     </td>
                     <td className="px-4 py-3">
-                      <FormatBadge format={m.format} schemaFormat={m.schemaFormat} schemaId={m.schemaId} />
+                      <FormatBadge format={m.format} outputFormat={m.outputFormat} schemaId={m.schemaId} />
                     </td>
                     <td className="px-4 py-3">
                       <Badge
