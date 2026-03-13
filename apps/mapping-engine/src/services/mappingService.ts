@@ -227,9 +227,12 @@ Rules:
         temperature: 0,
         max_tokens: 4096,
       });
-      const result       = (response.choices[0]?.message?.content ?? '{}').trim();
+      const result       = (response.choices?.[0]?.message?.content ?? '{}').trim();
       const inputTokens  = response.usage?.prompt_tokens     ?? 0;
       const outputTokens = response.usage?.completion_tokens ?? 0;
+      if (!result || result === '{}') {
+        throw new Error(`LLM returned empty response at stage ${stage} (${stageLabel})`);
+      }
       llmContext.stages.push({ stage, label: stageLabel, model, prompt, response: result, inputTokens, outputTokens });
       return result;
     } catch (err) {

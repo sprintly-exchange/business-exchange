@@ -66,9 +66,12 @@ export function createAIClient(config: PartnerLLMConfig): AIClient {
   if (config.provider === 'openai') {
     return new OpenAI({ apiKey: config.apiKey });
   }
-  // openai-compatible (Groq, Ollama, Together, etc.)
+  // openai-compatible (Groq, Ollama, LM Studio, Together, etc.)
+  // Normalize endpoint: strip trailing slash, add /v1 if not already present.
+  const base = (config.endpoint ?? '').replace(/\/+$/, '');
+  const baseURL = base.endsWith('/v1') ? base : `${base}/v1`;
   return new OpenAI({
     apiKey:  config.apiKey || 'not-needed',
-    baseURL: config.endpoint,
+    baseURL,
   });
 }
