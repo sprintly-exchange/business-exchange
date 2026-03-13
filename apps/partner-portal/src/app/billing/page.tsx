@@ -25,10 +25,18 @@ interface PartnerBilling { plan_id: string | null; plan_name: string | null; cus
 interface UsageRow { format: string; direction: string; message_count: number }
 interface Invoice { id: string; period: string; base_fee: string; usage_fee: string; total: string; status: string; line_items: Array<{ format: string; count: number; included: number; billable: number; rate: number; amount: number }>; issued_at: string | null; due_at: string | null }
 
+interface LLMUsage {
+  period: string;
+  platformTokens: { input: number; output: number; billedAmount: number };
+  externalTokens: { input: number; output: number };
+  calls: number;
+}
+
 export default function BillingPage() {
   const [billing, setBilling] = useState<PartnerBilling | null>(null);
   const [plans, setPlans] = useState<Plan[]>([]);
   const [usage, setUsage] = useState<{ period: string; rows: UsageRow[]; total: number } | null>(null);
+  const [llmUsage, setLlmUsage] = useState<LLMUsage | null>(null);
   const [invoices, setInvoices] = useState<Invoice[]>([]);
   const [period, setPeriod] = useState(currentPeriod());
   const [loading, setLoading] = useState(true);
@@ -36,12 +44,13 @@ export default function BillingPage() {
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const [myRes, usageRes, invRes] = await Promise.all([
-        billingApi.getMy(), billingApi.getUsage(period), billingApi.getInvoices(),
+      const [myRes, usageRes, llmRes, invRes] = await Promise.all([
+        billingApi.getMy(), billingApi.getUsage(period), billingApi.getLLMUsage(period), billingApi.getInvoices(),
       ]);
       setBilling(myRes.data.data.billing);
       setPlans(myRes.data.data.plans);
       setUsage(usageRes.data.data);
+      setLlmUsage(llmRes.data.data);
       setInvoices(invRes.data.data);
     } finally { setLoading(false); }
   }, [period]);
@@ -142,6 +151,46 @@ export default function BillingPage() {
                     </table>
                   )}
                 </Card>
+
+                {/* LLM Usage */}
+                {llmUsage && llmUsage.calls > 0 && (
+                  <Card className="p-6 space-y-3">
+                    <h2 className="font-semibold text-gray-900 text-sm flex items-center gap-2">
+                      <span className="inline-block w-2 h-2 rounded-full bg-indigo-500" />
+                      AI Mapping Usage — {llmUsage.period}
+                    </h2>
+                    <p className="text-xs text-gray-400">{llmUsage.calls} mapping call{llmUsage.calls !== 1 ? 's' : ''} this period</p>
+
+                    {llmUsage.platformTokens.input + llmUsage.platformTokens.output > 0 && (
+                      <div className="bg-indigo-50 border border-indigo-100 rounded-lg p-3 text-xs space-y-1">
+                        <p className="font-medium text-indigo-700">Platform LLM (billed to you)</p>
+                        <div className="flex justify-between text-indigo-600">
+                          <span>Input tokens</span><span className="font-mono">{fmtNum(llmUsage.platformTokens.input)}</span>
+                        </div>
+                        <div className="flex justify-between text-indigo-600">
+                          <span>Output tokens</span><span className="font-mono">{fmtNum(llmUsage.platformTokens.output)}</span>
+                        </div>
+                        <div className="flex justify-between font-semibold text-indigo-800 border-t border-indigo-200 pt-1 mt-1">
+                          <span>LLM inference cost</span>
+                          <span className="font-mono">${llmUsage.platformTokens.billedAmount.toFixed(4)}</span>
+                        </div>
+                      </div>
+                    )}
+
+                    {llmUsage.externalTokens.input + llmUsage.externalTokens.output > 0 && (
+                      <div className="bg-gray-50 border border-gray-200 rounded-lg p-3 text-xs space-y-1">
+                        <p className="font-medium text-gray-700">Your LLM (billed to your provider) <span className="text-green-600 ml-1">$0 platform charge</span></p>
+                        <div className="flex justify-between text-gray-500">
+                          <span>Estimated input tokens</span><span className="font-mono">{fmtNum(llmUsage.externalTokens.input)}</span>
+                        </div>
+                        <div className="flex justify-between text-gray-500">
+                          <span>Estimated output tokens</span><span className="font-mono">{fmtNum(llmUsage.externalTokens.output)}</span>
+                        </div>
+                        <p className="text-gray-400 pt-1">Check your provider's dashboard for the actual cost.</p>
+                      </div>
+                    )}
+                  </Card>
+                )}
               </div>
 
               {/* Invoices */}

@@ -4,6 +4,16 @@ export type PartnerStatus = 'pending' | 'approved' | 'suspended' | 'rejected' | 
 export type MessageFormat = 'json' | 'xml' | 'csv' | 'edi-x12' | 'edifact';
 export type MessageType = 'ORDERS' | 'INVOICES' | 'SHIPMENTS' | 'PRODUCTS' | 'PAYMENTS' | 'INVENTORY' | 'ACKNOWLEDGMENTS' | string;
 
+export type LLMProvider = 'azure' | 'openai' | 'openai-compatible';
+
+/** Per-partner LLM config passed to the mapping engine at request time. */
+export interface PartnerLLMConfig {
+  provider: LLMProvider;
+  endpoint?: string;   // required for azure / openai-compatible
+  model: string;
+  apiKey: string;      // decrypted — only in-process, never serialised to API
+}
+
 export interface Partner {
   id: string;
   name: string;
@@ -14,6 +24,13 @@ export interface Partner {
   supportedFormats: MessageFormat[];
   supportedMessageTypes: MessageType[];
   apiKeyHash?: string;
+  /** true  → use the platform's configured LLM (default) */
+  llmUsePlatform: boolean;
+  llmProvider?: LLMProvider;
+  llmEndpoint?: string;
+  llmModel?: string;
+  /** true if an encrypted API key is stored; the key itself is never returned */
+  llmApiKeySet?: boolean;
   createdAt: Date;
   updatedAt: Date;
 }

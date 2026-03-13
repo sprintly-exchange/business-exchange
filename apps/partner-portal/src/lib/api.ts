@@ -75,7 +75,16 @@ export const partnersApi = {
   register: (data: object) => api.post('/api/partners', data),
   list: (page = 1, pageSize = 20) => api.get(`/api/partners?page=${page}&pageSize=${pageSize}`),
   get: (id: string) => cachedGet(`/api/partners/${id}`, 60_000),           // 60s — sidebar profile
-  updateProfile: (id: string, data: { webhook_url?: string; supported_formats?: string[]; supported_message_types?: string[] }) => {
+  updateProfile: (id: string, data: {
+    webhook_url?: string;
+    supported_formats?: string[];
+    supported_message_types?: string[];
+    llm_use_platform?: boolean;
+    llm_provider?: string;
+    llm_endpoint?: string;
+    llm_model?: string;
+    llm_api_key?: string;
+  }) => {
     invalidateCache(`/api/partners/${id}`);
     return api.put(`/api/partners/${id}`, data);
   },
@@ -184,6 +193,7 @@ export const billingApi = {
   // Partner views
   getMy: () => api.get('/api/billing/my'),
   getUsage: (period?: string) => api.get(`/api/billing/usage${period ? `?period=${period}` : ''}`),
+  getLLMUsage: (period?: string) => api.get(`/api/billing/llm-usage${period ? `?period=${period}` : ''}`),
   getInvoices: () => api.get('/api/billing/invoices'),
   getPlans: () => api.get('/api/billing/plans'),
   // Admin

@@ -1,7 +1,33 @@
 import bcrypt from 'bcryptjs';
+import crypto from 'crypto';
 import { getPool } from '@bx/database';
 import { generateId } from '@bx/shared-utils';
-import { Partner, CreatePartnerDto, PartnerStatus } from '@bx/shared-types';
+import { Partner, CreatePartnerDto, PartnerStatus, LLMProvider } from '@bx/shared-types';
+
+// ── AES-256-GCM encryption for partner API keys ──────────────────────────────
+const ENCRYPTION_KEY = Buffer.from(
+  (process.env.ENCRYPTION_KEY ?? '').padEnd(64, '0').slice(0, 64),
+  'hex',
+);
+
+function encryptApiKey(plaintext: string): string {
+  const iv = crypto.randomBytes(12);
+  const cipher = crypto.createCipheriv('aes-256-gcm', ENCRYPTION_KEY, iv);
+  const encrypted = Buffer.concat([cipher.update(plaintext, 'utf8'), cipher.final()]);
+  const tag = cipher.getAuthTag();
+  // iv:tag:ciphertext — all base64, colon-separated
+  return `${iv.toString('base64')}:${tag.toString('base64')}:${encrypted.toString('base64')}`;
+}
+
+export function decryptApiKey(encoded: string): string {
+  const [ivB64, tagB64, dataB64] = encoded.split(':');
+  const iv        = Buffer.from(ivB64,  'base64');
+  const tag       = Buffer.from(tagB64, 'base64');
+  const encrypted = Buffer.from(dataB64,'base64');
+  const decipher  = crypto.createDecipheriv('aes-256-gcm', ENCRYPTION_KEY, iv);
+  decipher.setAuthTag(tag);
+  return decipher.update(encrypted) + decipher.final('utf8');
+}
 
 export class PartnerService {
   private db = getPool();
@@ -180,8 +206,17 @@ export class PartnerService {
   }
 
   async update(id: string, updates: Record<string, unknown>): Promise<Partner> {
-    const allowed = ['webhook_url', 'supported_formats', 'supported_message_types'];
+    const allowed = ['webhook_url', 'supported_formats', 'supported_message_types',
+                     'llm_use_platform', 'llm_provider', 'llm_endpoint', 'llm_model'];
     const fields = Object.keys(updates).filter((k) => allowed.includes(k));
+
+    // Handle API key separately — encrypt before storing
+    const hasApiKey = typeof updates['llm_api_key'] === 'string' && (updates['llm_api_key'] as string).length > 0;
+    if (hasApiKey) {
+      fields.push('llm_api_key_enc');
+      updates['llm_api_key_enc'] = encryptApiKey(updates['llm_api_key'] as string);
+    }
+
     if (!fields.length) throw new Error('No updatable fields');
 
     const setClauses = fields.map((f, i) => `${f} = $${i + 2}`).join(', ');
@@ -192,6 +227,24 @@ export class PartnerService {
       values
     );
     return this.mapRow(rows[0]);
+  }
+
+  /** Returns the decrypted LLM config for internal service use only. Never expose via API. */
+  async getLLMConfig(id: string): Promise<{ provider: LLMProvider; endpoint?: string; model: string; apiKey: string } | null> {
+    const { rows } = await this.db.query<Record<string, unknown>>(
+      'SELECT llm_use_platform, llm_provider, llm_endpoint, llm_model, llm_api_key_enc FROM partners WHERE id = $1',
+      [id],
+    );
+    if (!rows.length) return null;
+    const row = rows[0];
+    if (row['llm_use_platform'] !== false) return null; // use platform LLM
+    if (!row['llm_api_key_enc'] || !row['llm_provider'] || !row['llm_model']) return null;
+    return {
+      provider: row['llm_provider'] as LLMProvider,
+      endpoint: row['llm_endpoint'] as string | undefined,
+      model:    row['llm_model']    as string,
+      apiKey:   decryptApiKey(row['llm_api_key_enc'] as string),
+    };
   }
 
   private async updateStatus(id: string, status: PartnerStatus): Promise<Partner> {
@@ -213,6 +266,11 @@ export class PartnerService {
       webhookUrl: row['webhook_url'] as string | undefined,
       supportedFormats: row['supported_formats'] as Partner['supportedFormats'],
       supportedMessageTypes: (row['supported_message_types'] as string[] | undefined) ?? [],
+      llmUsePlatform: (row['llm_use_platform'] as boolean | undefined) ?? true,
+      llmProvider:    row['llm_provider']    as LLMProvider | undefined,
+      llmEndpoint:    row['llm_endpoint']    as string      | undefined,
+      llmModel:       row['llm_model']       as string      | undefined,
+      llmApiKeySet:   !!(row['llm_api_key_enc'] as string | undefined),
       createdAt: row['created_at'] as Date,
       updatedAt: row['updated_at'] as Date,
     };

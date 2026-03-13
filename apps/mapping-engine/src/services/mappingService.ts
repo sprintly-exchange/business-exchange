@@ -1,6 +1,6 @@
 import { getPool } from '@bx/database';
-import { MessageFormat, MappingRule } from '@bx/shared-types';
-import { getAIClient, getAIModel } from './aiClient';
+import { MessageFormat, MappingRule, PartnerLLMConfig } from '@bx/shared-types';
+import { getAIClient, getAIModel, createAIClient } from './aiClient';
 import { createLogger } from '@bx/logger';
 
 const logger = createLogger('mapping-engine');
@@ -10,6 +10,10 @@ interface TransformInput {
   sourcePartnerId: string;
   targetPartnerId: string;
   format: MessageFormat;
+  /** Optional BYOLLM config for Stage 1 (source partner's outbound mapping). */
+  sourceLlmConfig?: PartnerLLMConfig;
+  /** Optional BYOLLM config for Stage 2 (target partner's inbound mapping). */
+  targetLlmConfig?: PartnerLLMConfig;
 }
 
 interface SchemaInfo {
@@ -26,6 +30,8 @@ export interface LLMStageTrace {
   model: string;
   prompt: string;
   response: string;
+  inputTokens: number;
+  outputTokens: number;
 }
 
 export interface LLMContext {
@@ -114,7 +120,7 @@ export class MappingService {
     }
 
     // ── Stage 1: source payload → CDM JSON via LLM ───────────────────────────
-    const cdmJson = await this.llmToCDM(input.payload, input.format, outboundSchema, llmContext);
+    const cdmJson = await this.llmToCDM(input.payload, input.format, outboundSchema, llmContext, input.sourceLlmConfig);
 
     // ── Stage 2: CDM JSON → target format via LLM ────────────────────────────
     let deliveryPayload: string;
@@ -122,7 +128,7 @@ export class MappingService {
 
     if (inboundSchema) {
       outputFormat = inboundSchema.format as MessageFormat;
-      deliveryPayload = await this.llmToTarget(cdmJson, inboundSchema, llmContext);
+      deliveryPayload = await this.llmToTarget(cdmJson, inboundSchema, llmContext, input.targetLlmConfig);
     } else {
       outputFormat = 'json';
       deliveryPayload = cdmJson;
@@ -139,7 +145,7 @@ export class MappingService {
   }
 
   // ─── Stage 1: Source payload → CDM JSON ─────────────────────────────────────
-  private async llmToCDM(payload: string, format: MessageFormat, schema: SchemaInfo | null, llmContext: LLMContext): Promise<string> {
+  private async llmToCDM(payload: string, format: MessageFormat, schema: SchemaInfo | null, llmContext: LLMContext, llmConfig?: PartnerLLMConfig): Promise<string> {
     const formatLabel = this.formatLabel(format);
     const hintsBlock = schema?.rules.length
       ? `\nKnown field mappings for this partner (use as hints):\n` +
@@ -166,11 +172,11 @@ IMPORTANT:
     const stageLabel = schema
       ? `${schema.partnerName} ${formatLabel} → CDM`
       : `${formatLabel} → CDM`;
-    return this.callLLM(prompt, 'CDM JSON object', 1, stageLabel, llmContext);
+    return this.callLLM(prompt, 'CDM JSON object', 1, stageLabel, llmContext, llmConfig);
   }
 
   // ─── Stage 2: CDM JSON → target format ──────────────────────────────────────
-  private async llmToTarget(cdmJson: string, schema: SchemaInfo, llmContext: LLMContext): Promise<string> {
+  private async llmToTarget(cdmJson: string, schema: SchemaInfo, llmContext: LLMContext, llmConfig?: PartnerLLMConfig): Promise<string> {
     const formatLabel = this.formatLabel(schema.format as MessageFormat);
     const hintsBlock = schema.rules.length
       ? `\nKnown field mappings (CDM → partner fields, use as hints):\n` +
@@ -194,7 +200,7 @@ Rules:
 - Keep dates in the format expected by this partner's format (ISO for JSON/XML, YYYYMMDD for EDI)`;
 
     const stageLabel = `CDM → ${schema.partnerName} ${formatLabel}`;
-    return this.callLLM(prompt, `${formatLabel} payload`, 2, stageLabel, llmContext);
+    return this.callLLM(prompt, `${formatLabel} payload`, 2, stageLabel, llmContext, llmConfig);
   }
 
   // ─── LLM call helper ────────────────────────────────────────────────────────
@@ -204,10 +210,11 @@ Rules:
     stage: 1 | 2,
     stageLabel: string,
     llmContext: LLMContext,
+    llmConfig?: PartnerLLMConfig,
   ): Promise<string> {
     try {
-      const client = getAIClient();
-      const model = getAIModel();
+      const client = llmConfig ? createAIClient(llmConfig) : getAIClient();
+      const model  = llmConfig ? llmConfig.model : getAIModel();
       const response = await client.chat.completions.create({
         model,
         messages: [
@@ -220,8 +227,10 @@ Rules:
         temperature: 0,
         max_tokens: 4096,
       });
-      const result = (response.choices[0]?.message?.content ?? '{}').trim();
-      llmContext.stages.push({ stage, label: stageLabel, model, prompt, response: result });
+      const result       = (response.choices[0]?.message?.content ?? '{}').trim();
+      const inputTokens  = response.usage?.prompt_tokens     ?? 0;
+      const outputTokens = response.usage?.completion_tokens ?? 0;
+      llmContext.stages.push({ stage, label: stageLabel, model, prompt, response: result, inputTokens, outputTokens });
       return result;
     } catch (err) {
       logger.error({ err }, 'LLM mapping call failed');

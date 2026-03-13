@@ -4,7 +4,7 @@ import { partnersApi, brandingApi, authApi, BrandingConfig } from '@/lib/api';
 import { getPartnerId } from '@/lib/utils';
 import { Card } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
-import { Webhook, CheckCircle2, AlertCircle, Info, Plus, X, Palette, Lock } from 'lucide-react';
+import { Webhook, CheckCircle2, AlertCircle, Info, Plus, X, Palette, Lock, Cpu } from 'lucide-react';
 import { useTheme } from '@/components/ThemeProvider';
 
 const ALL_FORMATS = ['json', 'xml', 'csv', 'edi-x12', 'edifact'];
@@ -20,6 +20,11 @@ interface PartnerProfile {
   supportedFormats?: string[];
   supportedMessageTypes?: string[];
   status: string;
+  llmUsePlatform?: boolean;
+  llmProvider?: string;
+  llmEndpoint?: string;
+  llmModel?: string;
+  llmApiKeySet?: boolean;
 }
 
 export default function SettingsPage() {
@@ -42,6 +47,16 @@ export default function SettingsPage() {
   const [pwdSaving, setPwdSaving] = useState(false);
   const [pwdResult, setPwdResult] = useState<{ ok: boolean; text: string } | null>(null);
 
+  // LLM configuration
+  const [llmUsePlatform, setLlmUsePlatform] = useState(true);
+  const [llmProvider, setLlmProvider] = useState<string>('openai');
+  const [llmEndpoint, setLlmEndpoint] = useState('');
+  const [llmModel, setLlmModel] = useState('');
+  const [llmApiKey, setLlmApiKey] = useState('');
+  const [llmApiKeySet, setLlmApiKeySet] = useState(false);
+  const [llmSaving, setLlmSaving] = useState(false);
+  const [llmResult, setLlmResult] = useState<{ ok: boolean; text: string } | null>(null);
+
   // Sync branding from ThemeProvider once it loads
   useEffect(() => { setBranding(themeBranding); }, [themeBranding]);
 
@@ -53,6 +68,11 @@ export default function SettingsPage() {
         setProfile(p);
         setWebhookUrl(p.webhookUrl ?? '');
         setMessageTypes(p.supportedMessageTypes ?? []);
+        setLlmUsePlatform(p.llmUsePlatform ?? true);
+        setLlmProvider(p.llmProvider ?? 'openai');
+        setLlmEndpoint(p.llmEndpoint ?? '');
+        setLlmModel(p.llmModel ?? '');
+        setLlmApiKeySet(p.llmApiKeySet ?? false);
       })
       .catch(() => setResult({ ok: false, text: 'Failed to load profile' }))
       .finally(() => setLoading(false));
@@ -133,6 +153,33 @@ export default function SettingsPage() {
       setResult({ ok: false, text: msg });
     } finally {
       setSaving(false);
+    }
+  };
+
+  const saveLLM = async () => {
+    setLlmResult(null);
+    if (!llmUsePlatform) {
+      if (!llmModel) { setLlmResult({ ok: false, text: 'Model name is required' }); return; }
+      if ((llmProvider === 'azure' || llmProvider === 'openai-compatible') && !llmEndpoint) {
+        setLlmResult({ ok: false, text: 'Endpoint URL is required for this provider' }); return;
+      }
+    }
+    setLlmSaving(true);
+    try {
+      await partnersApi.updateProfile(myId, {
+        llm_use_platform: llmUsePlatform,
+        llm_provider: llmUsePlatform ? undefined : llmProvider,
+        llm_endpoint: llmUsePlatform ? undefined : llmEndpoint || undefined,
+        llm_model: llmUsePlatform ? undefined : llmModel,
+        ...(llmApiKey && { llm_api_key: llmApiKey }),
+      } as Parameters<typeof partnersApi.updateProfile>[1]);
+      setLlmApiKey('');
+      setLlmApiKeySet(true);
+      setLlmResult({ ok: true, text: llmUsePlatform ? 'Switched to Platform LLM' : 'Your LLM configuration saved' });
+    } catch {
+      setLlmResult({ ok: false, text: 'Failed to save LLM configuration' });
+    } finally {
+      setLlmSaving(false);
     }
   };
 
@@ -389,6 +436,109 @@ export default function SettingsPage() {
           >
             Change Password
           </Button>
+        </div>
+      </Card>
+
+      {/* AI / LLM Configuration */}
+      <Card>
+        <div className="flex items-center gap-2 mb-4">
+          <Cpu className="w-4 h-4 text-indigo-500" />
+          <h2 className="text-sm font-semibold text-gray-700">AI / LLM Configuration</h2>
+        </div>
+
+        {/* Toggle */}
+        <div className="space-y-3 mb-4">
+          <label className="flex items-start gap-3 cursor-pointer group">
+            <input
+              type="radio" name="llmMode" className="mt-0.5 accent-indigo-600"
+              checked={llmUsePlatform}
+              onChange={() => setLlmUsePlatform(true)}
+            />
+            <div>
+              <p className="text-sm font-medium text-gray-800">Use Platform LLM <span className="text-xs text-indigo-500 font-normal ml-1">default</span></p>
+              <p className="text-xs text-gray-400 mt-0.5">Managed by Business Exchange — no setup required. Usage is metered and billed on your invoice.</p>
+            </div>
+          </label>
+          <label className="flex items-start gap-3 cursor-pointer group">
+            <input
+              type="radio" name="llmMode" className="mt-0.5 accent-indigo-600"
+              checked={!llmUsePlatform}
+              onChange={() => setLlmUsePlatform(false)}
+            />
+            <div>
+              <p className="text-sm font-medium text-gray-800">Use My Own LLM</p>
+              <p className="text-xs text-gray-400 mt-0.5">Your data stays in your own AI account. LLM inference is billed directly to your provider — not to this platform.</p>
+            </div>
+          </label>
+        </div>
+
+        {/* Own LLM fields */}
+        {!llmUsePlatform && (
+          <div className="space-y-3 border-t border-gray-100 pt-4">
+            <div>
+              <label className="text-xs text-gray-500 mb-1 block">Provider</label>
+              <select
+                className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm bg-white"
+                value={llmProvider}
+                onChange={e => setLlmProvider(e.target.value)}
+              >
+                <option value="openai">OpenAI (api.openai.com)</option>
+                <option value="azure">Azure OpenAI</option>
+                <option value="openai-compatible">OpenAI-compatible (Groq, Ollama, Together…)</option>
+              </select>
+            </div>
+
+            {(llmProvider === 'azure' || llmProvider === 'openai-compatible') && (
+              <div>
+                <label className="text-xs text-gray-500 mb-1 block">
+                  {llmProvider === 'azure' ? 'Azure Endpoint URL' : 'Base URL'}
+                </label>
+                <input
+                  className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm"
+                  placeholder={llmProvider === 'azure' ? 'https://my-org.openai.azure.com/' : 'https://api.groq.com/openai/v1'}
+                  value={llmEndpoint}
+                  onChange={e => setLlmEndpoint(e.target.value)}
+                />
+              </div>
+            )}
+
+            <div>
+              <label className="text-xs text-gray-500 mb-1 block">
+                {llmProvider === 'azure' ? 'Deployment Name' : 'Model Name'}
+              </label>
+              <input
+                className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm"
+                placeholder={llmProvider === 'azure' ? 'gpt-4o-mini' : 'gpt-4o-mini'}
+                value={llmModel}
+                onChange={e => setLlmModel(e.target.value)}
+              />
+            </div>
+
+            <div>
+              <label className="text-xs text-gray-500 mb-1 block">
+                API Key {llmApiKeySet && <span className="text-green-600 ml-1">✓ key stored</span>}
+              </label>
+              <input
+                type="password"
+                className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm font-mono"
+                placeholder={llmApiKeySet ? '••••••••  (leave blank to keep existing)' : 'sk-…'}
+                value={llmApiKey}
+                onChange={e => setLlmApiKey(e.target.value)}
+              />
+              <p className="text-xs text-gray-400 mt-1">Stored encrypted (AES-256). Never exposed in API responses.</p>
+            </div>
+          </div>
+        )}
+
+        {llmResult && (
+          <div className={`flex items-center gap-2 rounded-lg px-3 py-2 text-sm mt-3 ${llmResult.ok ? 'bg-green-50 text-green-700 border border-green-200' : 'bg-red-50 text-red-700 border border-red-200'}`}>
+            {llmResult.ok ? <CheckCircle2 className="w-4 h-4 shrink-0" /> : <AlertCircle className="w-4 h-4 shrink-0" />}
+            {llmResult.text}
+          </div>
+        )}
+
+        <div className="flex justify-end mt-4">
+          <Button onClick={saveLLM} loading={llmSaving}>Save LLM Config</Button>
         </div>
       </Card>
 

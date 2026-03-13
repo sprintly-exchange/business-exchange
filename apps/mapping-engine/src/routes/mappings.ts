@@ -7,11 +7,20 @@ const router = Router();
 const svc = new MappingService();
 const db = getPool();
 
+const llmConfigSchema = z.object({
+  provider: z.enum(['azure', 'openai', 'openai-compatible']),
+  endpoint: z.string().optional(),
+  model: z.string(),
+  apiKey: z.string(),
+});
+
 const transformSchema = z.object({
   payload: z.string(),
   sourcePartnerId: z.string().uuid(),
   targetPartnerId: z.string().uuid(),
   format: z.enum(['json', 'xml', 'csv', 'edi-x12', 'edifact']),
+  sourceLlmConfig: llmConfigSchema.optional(),
+  targetLlmConfig: llmConfigSchema.optional(),
 });
 
 // POST /api/mappings/transform — transform a payload

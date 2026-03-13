@@ -1,10 +1,12 @@
 import { getPool } from '@bx/database';
 import { generateId } from '@bx/shared-utils';
-import { Message, MessageFormat, MessageStatus } from '@bx/shared-types';
+import { Message, MessageFormat, MessageStatus, PartnerLLMConfig } from '@bx/shared-types';
 import { WebhookDelivery } from '../delivery/webhookDelivery';
 import axios from 'axios';
 
-const MAPPING_ENGINE_URL = process.env.MAPPING_ENGINE_URL ?? 'http://bx-mapping-engine.internal:3005';
+const MAPPING_ENGINE_URL  = process.env.MAPPING_ENGINE_URL  ?? 'http://bx-mapping-engine.internal:3005';
+const BILLING_SERVICE_URL = process.env.BILLING_SERVICE_URL ?? 'http://bx-billing-service.internal:3007';
+const PARTNER_SERVICE_URL = process.env.PARTNER_SERVICE_URL ?? 'http://bx-partner-service.internal:3002';
 
 interface RouteInput {
   sourcePartnerId: string;
@@ -60,7 +62,13 @@ export class MessageRouter {
         [messageId]
       );
 
-      // Step 1: Apply mapping transformation
+      // Step 1: Load per-partner LLM configs (returns null = use platform LLM)
+      const [sourceLlmConfig, targetLlmConfig] = await Promise.all([
+        this.getPartnerLLMConfig(input.sourcePartnerId),
+        this.getPartnerLLMConfig(input.targetPartnerId),
+      ]);
+
+      // Step 2: Apply mapping transformation
       let deliveryPayload = input.payload;
       let deliveryFormat = input.format;
       let schemaId: string | undefined;
@@ -73,17 +81,24 @@ export class MessageRouter {
             rulesApplied: number;
             schemaId?: string;
             outputFormat: string;
-            llmContext: { stages: { stage: number; label: string; model: string; prompt: string; response: string }[] };
+            llmContext: { stages: { stage: number; label: string; model: string; prompt: string; response: string; inputTokens: number; outputTokens: number }[] };
           };
         }>(
           `${MAPPING_ENGINE_URL}/api/mappings/transform`,
-          { payload: input.payload, sourcePartnerId: input.sourcePartnerId, targetPartnerId: input.targetPartnerId, format: input.format },
+          {
+            payload: input.payload,
+            sourcePartnerId: input.sourcePartnerId,
+            targetPartnerId: input.targetPartnerId,
+            format: input.format,
+            ...(sourceLlmConfig && { sourceLlmConfig }),
+            ...(targetLlmConfig && { targetLlmConfig }),
+          },
           { timeout: 60000 },
         );
         if (mapRes.data.success && mapRes.data.data.rulesApplied > 0) {
           deliveryPayload = mapRes.data.data.mappedPayload;
-          deliveryFormat = mapRes.data.data.outputFormat as MessageFormat;
-          schemaId = mapRes.data.data.schemaId;
+          deliveryFormat  = mapRes.data.data.outputFormat as MessageFormat;
+          schemaId        = mapRes.data.data.schemaId;
           await this.db.query(
             `UPDATE messages
              SET mapped_payload = $2, cdm_payload = $3, schema_id = $4, output_format = $5,
@@ -98,6 +113,24 @@ export class MessageRouter {
               JSON.stringify(mapRes.data.data.llmContext ?? {}),
             ],
           );
+
+          // Step 3: Record LLM billing usage asynchronously (non-blocking)
+          const period = new Date().toISOString().slice(0, 7); // YYYY-MM
+          for (const stg of mapRes.data.data.llmContext?.stages ?? []) {
+            const partnerId = stg.stage === 1 ? input.sourcePartnerId : input.targetPartnerId;
+            const llmSource = stg.stage === 1
+              ? (sourceLlmConfig ? 'external' : 'platform')
+              : (targetLlmConfig ? 'external' : 'platform');
+            this.recordLLMUsage({
+              partnerId, messageId, period,
+              stage: stg.stage as 1 | 2,
+              llmSource,
+              provider: stg.model.includes('azure') ? 'azure' : 'openai',
+              model: stg.model,
+              inputTokens:  stg.inputTokens  ?? 0,
+              outputTokens: stg.outputTokens ?? 0,
+            }).catch(() => {}); // best-effort
+          }
         }
       } catch (mapErr) {
         // Mapping failed — still attempt delivery with raw payload, record warning
@@ -296,5 +329,32 @@ export class MessageRouter {
       schemaFormat: row['schema_format'] as string | undefined,
       outputFormat: row['output_format'] as string | undefined,
     };
+  }
+
+  /** Fetches a partner's decrypted LLM config via the partner-service internal API.
+   *  Returns null if the partner uses the platform LLM (default). */
+  private async getPartnerLLMConfig(partnerId: string): Promise<PartnerLLMConfig | null> {
+    try {
+      const res = await axios.get<{ success: boolean; data: PartnerLLMConfig | null }>(
+        `${PARTNER_SERVICE_URL}/api/partners/${partnerId}/llm-config`,
+        { timeout: 5000 },
+      );
+      return res.data.success ? res.data.data : null;
+    } catch {
+      return null; // fall back to platform LLM silently
+    }
+  }
+
+  /** Records LLM usage to the billing service (best-effort, non-blocking). */
+  private async recordLLMUsage(usage: {
+    partnerId: string; messageId: string; period: string;
+    stage: 1 | 2; llmSource: string; provider: string; model: string;
+    inputTokens: number; outputTokens: number;
+  }): Promise<void> {
+    await axios.post(
+      `${BILLING_SERVICE_URL}/api/billing/llm-usage`,
+      usage,
+      { timeout: 5000 },
+    );
   }
 }

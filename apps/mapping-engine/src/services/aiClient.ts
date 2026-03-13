@@ -1,64 +1,74 @@
 /**
  * AI provider factory for the mapping-engine.
  *
- * Controlled by the AI_PROVIDER env var:
- *   azure            — Azure OpenAI  (default, existing behaviour)
- *   openai           — api.openai.com
- *   openai-compatible — any OpenAI-compatible endpoint (Groq, Ollama, Together, etc.)
+ * Two modes:
+ *   1. Platform singleton — reads AI_PROVIDER + associated env vars (existing behaviour).
+ *   2. Per-request client  — built from a PartnerLLMConfig passed at call time (BYOLLM).
  *
- * Env vars:
- *   AI_PROVIDER=azure | openai | openai-compatible
- *
- *   Azure:
- *     AZURE_OPENAI_API_KEY
- *     AZURE_OPENAI_ENDPOINT
- *     AZURE_OPENAI_DEPLOYMENT   (also used as model name)
- *     AZURE_OPENAI_API_VERSION  (default: 2024-08-01-preview)
- *
- *   OpenAI / OpenAI-compatible:
- *     OPENAI_API_KEY
- *     OPENAI_MODEL              (default: gpt-4o-mini)
- *     OPENAI_BASE_URL           (optional, only needed for openai-compatible)
+ * Supported providers: azure | openai | openai-compatible
  */
 
 import OpenAI, { AzureOpenAI } from 'openai';
+import type { PartnerLLMConfig } from '@bx/shared-types';
 
 export type AIClient = OpenAI | AzureOpenAI;
 
-let _client: AIClient | null = null;
+// ── Platform singleton (env-based) ──────────────────────────────────────────
+let _platformClient: AIClient | null = null;
 
-export function getAIClient(): AIClient {
-  if (_client) return _client;
-
+function buildClientFromEnv(): AIClient {
   const provider = (process.env.AI_PROVIDER ?? 'azure').toLowerCase();
 
   if (provider === 'azure') {
-    _client = new AzureOpenAI({
+    return new AzureOpenAI({
       apiKey:     process.env.AZURE_OPENAI_API_KEY,
       endpoint:   process.env.AZURE_OPENAI_ENDPOINT,
       apiVersion: process.env.AZURE_OPENAI_API_VERSION ?? '2024-08-01-preview',
     });
-  } else if (provider === 'openai') {
-    _client = new OpenAI({
-      apiKey: process.env.OPENAI_API_KEY,
-    });
-  } else if (provider === 'openai-compatible') {
-    _client = new OpenAI({
+  }
+  if (provider === 'openai') {
+    return new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+  }
+  if (provider === 'openai-compatible') {
+    return new OpenAI({
       apiKey:  process.env.OPENAI_API_KEY ?? 'not-needed',
       baseURL: process.env.OPENAI_BASE_URL,
     });
-  } else {
-    throw new Error(`Unknown AI_PROVIDER "${provider}". Must be azure | openai | openai-compatible`);
   }
-
-  return _client;
+  throw new Error(`Unknown AI_PROVIDER "${provider}". Must be azure | openai | openai-compatible`);
 }
 
-/** Returns the model/deployment name to use in chat.completions.create() */
+/** Returns the platform-level singleton AI client (env-configured). */
+export function getAIClient(): AIClient {
+  if (!_platformClient) _platformClient = buildClientFromEnv();
+  return _platformClient;
+}
+
+/** Returns the platform-level model/deployment name. */
 export function getAIModel(): string {
   const provider = (process.env.AI_PROVIDER ?? 'azure').toLowerCase();
-  if (provider === 'azure') {
-    return process.env.AZURE_OPENAI_DEPLOYMENT ?? 'gpt-4o-mini';
+  return provider === 'azure'
+    ? (process.env.AZURE_OPENAI_DEPLOYMENT ?? 'gpt-4o-mini')
+    : (process.env.OPENAI_MODEL ?? 'gpt-4o-mini');
+}
+
+// ── Per-partner client (BYOLLM) ─────────────────────────────────────────────
+
+/** Builds a fresh AI client from a partner's own LLM config. */
+export function createAIClient(config: PartnerLLMConfig): AIClient {
+  if (config.provider === 'azure') {
+    return new AzureOpenAI({
+      apiKey:     config.apiKey,
+      endpoint:   config.endpoint,
+      apiVersion: process.env.AZURE_OPENAI_API_VERSION ?? '2024-08-01-preview',
+    });
   }
-  return process.env.OPENAI_MODEL ?? 'gpt-4o-mini';
+  if (config.provider === 'openai') {
+    return new OpenAI({ apiKey: config.apiKey });
+  }
+  // openai-compatible (Groq, Ollama, Together, etc.)
+  return new OpenAI({
+    apiKey:  config.apiKey || 'not-needed',
+    baseURL: config.endpoint,
+  });
 }

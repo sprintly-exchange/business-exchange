@@ -207,6 +207,74 @@ export class BillingService {
     return { id: invoiceId, period, base_fee: String(baseFee), usage_fee: String(usageFee), total: String(total), status: 'issued', line_items: lineItems, issued_at: issuedAt, due_at: dueAt };
   }
 
+  /** Records a single LLM mapping call's token usage for billing. */
+  async recordLLMUsage(data: {
+    partnerId: string; messageId?: string; period: string;
+    stage: 1 | 2; llmSource: string; provider: string; model: string;
+    inputTokens: number; outputTokens: number;
+  }): Promise<void> {
+    // Determine billed amount: $0 for external LLM, token-rate-based for platform
+    let billedAmount = 0;
+    if (data.llmSource === 'platform') {
+      const billing = await this.getPartnerBilling(data.partnerId);
+      const planId  = billing?.plan_id ?? null;
+      if (planId) {
+        const { rows } = await this.db.query<{ operation_type: string; rate_per_message: string }>(
+          `SELECT operation_type, rate_per_message FROM billing_rates WHERE plan_id = $1
+           AND operation_type IN ('llm-input-token', 'llm-output-token')`,
+          [planId],
+        );
+        const inputRate  = parseFloat(rows.find(r => r.operation_type === 'llm-input-token')?.rate_per_message  ?? '0');
+        const outputRate = parseFloat(rows.find(r => r.operation_type === 'llm-output-token')?.rate_per_message ?? '0');
+        // Rates are per 1,000 tokens
+        billedAmount = (data.inputTokens / 1000) * inputRate + (data.outputTokens / 1000) * outputRate;
+      }
+    }
+
+    await this.db.query(
+      `INSERT INTO billing_llm_usage
+         (id, partner_id, message_id, period, stage, llm_source, provider, model, input_tokens, output_tokens, billed_amount)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
+      [
+        generateId(), data.partnerId, data.messageId ?? null, data.period,
+        data.stage, data.llmSource, data.provider, data.model,
+        data.inputTokens, data.outputTokens, billedAmount,
+      ],
+    );
+  }
+
+  /** Returns LLM usage summary for a partner/period. */
+  async getLLMUsage(partnerId: string, period?: string): Promise<{
+    period: string;
+    platformTokens: { input: number; output: number; billedAmount: number };
+    externalTokens: { input: number; output: number };
+    calls: number;
+  }> {
+    const p = period ?? new Date().toISOString().slice(0, 7);
+    const { rows } = await this.db.query<Record<string, unknown>>(
+      `SELECT llm_source, SUM(input_tokens) AS input, SUM(output_tokens) AS output,
+              SUM(billed_amount) AS billed, COUNT(*) AS calls
+       FROM billing_llm_usage WHERE partner_id = $1 AND period = $2
+       GROUP BY llm_source`,
+      [partnerId, p],
+    );
+    const platform = rows.find(r => r['llm_source'] === 'platform');
+    const external = rows.find(r => r['llm_source'] === 'external');
+    return {
+      period: p,
+      platformTokens: {
+        input:        parseInt(String(platform?.['input']  ?? 0), 10),
+        output:       parseInt(String(platform?.['output'] ?? 0), 10),
+        billedAmount: parseFloat(String(platform?.['billed'] ?? 0)),
+      },
+      externalTokens: {
+        input:  parseInt(String(external?.['input']  ?? 0), 10),
+        output: parseInt(String(external?.['output'] ?? 0), 10),
+      },
+      calls: parseInt(String(rows.reduce((s, r) => s + parseInt(String(r['calls']), 10), 0)), 10),
+    };
+  }
+
   async getInvoices(partnerId: string): Promise<Invoice[]> {
     const { rows } = await this.db.query<Record<string, unknown>>(
       'SELECT * FROM billing_invoices WHERE partner_id=$1 ORDER BY period DESC', [partnerId]

@@ -114,4 +114,15 @@ router.put('/:id', async (req: Request, res: Response) => {
   }
 });
 
+// Internal endpoint — returns decrypted LLM config for integration-service use only.
+// Only accessible from within the cluster (no JWT required on this internal call).
+router.get('/:id/llm-config', async (req: Request, res: Response) => {
+  try {
+    const config = await svc.getLLMConfig(req.params.id);
+    res.json({ success: true, data: config });
+  } catch {
+    res.status(500).json({ success: false, error: 'Failed to fetch LLM config' });
+  }
+});
+
 export { router as partnerRoutes };

@@ -32,6 +32,24 @@ router.get('/usage', async (req: Request, res: Response) => {
   } catch { res.status(500).json({ success: false, error: 'Failed to load usage' }); }
 });
 
+// GET /api/billing/llm-usage?period=YYYY-MM — current partner's LLM token usage
+router.get('/llm-usage', async (req: Request, res: Response) => {
+  const partnerId = req.headers['x-partner-id'] as string;
+  const period = req.query['period'] as string | undefined;
+  try {
+    const usage = await svc.getLLMUsage(partnerId, period);
+    res.json({ success: true, data: usage });
+  } catch { res.status(500).json({ success: false, error: 'Failed to load LLM usage' }); }
+});
+
+// POST /api/billing/llm-usage — internal: record LLM call usage (called by integration-service)
+router.post('/llm-usage', async (req: Request, res: Response) => {
+  try {
+    await svc.recordLLMUsage(req.body);
+    res.json({ success: true });
+  } catch { res.status(500).json({ success: false, error: 'Failed to record LLM usage' }); }
+});
+
 // GET /api/billing/invoices — current partner's invoices
 router.get('/invoices', async (req: Request, res: Response) => {
   const partnerId = req.headers['x-partner-id'] as string;
