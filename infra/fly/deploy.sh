@@ -37,10 +37,13 @@ if [[ ! -f "$ENV_FILE" ]]; then
   exit 1
 fi
 
+_TMP_ENV=$(mktemp)
+grep -v '^\s*#' "$ENV_FILE" | grep -v '^\s*$' > "$_TMP_ENV"
 set -o allexport
 # shellcheck disable=SC1090
-source <(grep -v '^\s*#' "$ENV_FILE" | grep -v '^\s*$')
+source "$_TMP_ENV"
 set +o allexport
+rm -f "$_TMP_ENV"
 
 : "${FLY_API_TOKEN:?FLY_API_TOKEN is required in $ENV_FILE}"
 export FLY_API_TOKEN
