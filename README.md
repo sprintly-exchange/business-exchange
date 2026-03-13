@@ -242,6 +242,37 @@ From `.env.example`:
 - `MAPPING_ENGINE_URL`
 - `ENCRYPTION_KEY`
 
+### Partner BYOLLM
+
+The platform supports **BYOLLM** ("bring your own LLM") at the partner level.
+
+By default, partners use the platform-configured LLM. A partner can switch to their own provider in the portal under **Settings** by saving:
+
+- `llm_use_platform=false`
+- `llm_provider`
+- `llm_model`
+- `llm_endpoint` for `azure` and `openai-compatible`
+- `llm_api_key`
+
+Supported partner-level providers match the platform provider set:
+
+- `azure`
+- `openai`
+- `openai-compatible`
+
+Important behavior:
+
+- partner API keys are stored encrypted and are not returned by the public profile API
+- the integration service loads sender and receiver LLM configs per request
+- the mapping engine can use different LLM configs for stage 1 and stage 2 of a transform
+- if no partner-level config exists, the platform LLM is used automatically
+
+In practice this means:
+
+- sender can use their own LLM for `sender format -> CDM`
+- receiver can use their own LLM for `CDM -> receiver format`
+- the two sides do not need to use the same provider or model
+
 ## Development workflows
 
 ### Common commands
@@ -289,6 +320,26 @@ Typical transformation path:
 ```text
 Sender Payload -> CDM -> Receiver Payload
 ```
+
+### Mapping stages and partner LLM selection
+
+The mapping engine supports two independent LLM stages:
+
+1. sender payload -> CDM
+2. CDM -> receiver payload
+
+Each stage can use either:
+
+- the platform LLM, or
+- the partner's own BYOLLM configuration
+
+This allows mixed flows such as:
+
+- sender uses platform LLM, receiver uses BYOLLM
+- sender uses Azure OpenAI, receiver uses an OpenAI-compatible endpoint
+- both partners use platform LLM
+
+Billing and tracing behavior distinguishes platform LLM usage from external partner-managed usage.
 
 ### Visibility rules in the integrations UI
 
@@ -372,7 +423,7 @@ An admin user is created automatically on first startup.
 | Field | Default |
 | --- | --- |
 | Username | `admin` |
-| Password | `admin1234` |
+| Password | `changeme` |
 
 Change the default password before using the platform anywhere beyond local development.
 
