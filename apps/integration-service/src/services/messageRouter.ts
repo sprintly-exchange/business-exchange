@@ -2,11 +2,14 @@ import { getPool } from '@bx/database';
 import { generateId } from '@bx/shared-utils';
 import { Message, MessageFormat, MessageStatus, PartnerLLMConfig } from '@bx/shared-types';
 import { WebhookDelivery } from '../delivery/webhookDelivery';
+import { createLogger } from '@bx/logger';
 import axios from 'axios';
 
-const MAPPING_ENGINE_URL  = process.env.MAPPING_ENGINE_URL  ?? 'http://bx-mapping-engine.internal:3005';
-const BILLING_SERVICE_URL = process.env.BILLING_SERVICE_URL ?? 'http://bx-billing-service.internal:3007';
-const PARTNER_SERVICE_URL = process.env.PARTNER_SERVICE_URL ?? 'http://bx-partner-service.internal:3002';
+const logger = createLogger('integration-service');
+
+const MAPPING_ENGINE_URL  = process.env.MAPPING_ENGINE_URL  ?? 'http://localhost:3005';
+const BILLING_SERVICE_URL = process.env.BILLING_SERVICE_URL ?? 'http://localhost:3007';
+const PARTNER_SERVICE_URL = process.env.PARTNER_SERVICE_URL ?? 'http://localhost:3002';
 
 interface RouteInput {
   sourcePartnerId: string;
@@ -133,8 +136,9 @@ export class MessageRouter {
           }
         }
       } catch (mapErr) {
-        // Mapping failed — still attempt delivery with raw payload, record warning
+        // Mapping failed — still attempt delivery with raw payload, preserve warning in DB
         const mapErrMsg = mapErr instanceof Error ? mapErr.message : 'Mapping service unavailable';
+        logger.warn({ err: mapErr, messageId, mappingUrl: MAPPING_ENGINE_URL }, 'Mapping call failed — delivering as-is');
         await this.db.query(
           `UPDATE messages SET error_message = $2, updated_at = NOW() WHERE id = $1`,
           [messageId, `Mapping warning: ${mapErrMsg}`]
@@ -165,8 +169,15 @@ export class MessageRouter {
       });
 
       await this.db.query(
-        `UPDATE messages SET status = $2, error_message = $3, updated_at = NOW() WHERE id = $1`,
-        [messageId, delivered ? 'delivered' : 'failed', delivered ? null : (errorMessage ?? 'Webhook delivery failed after retries')]
+        `UPDATE messages
+         SET status = $2,
+             error_message = CASE
+               WHEN $3 THEN error_message  -- keep any mapping warning on success
+               ELSE $4
+             END,
+             updated_at = NOW()
+         WHERE id = $1`,
+        [messageId, delivered ? 'delivered' : 'failed', delivered, delivered ? null : (errorMessage ?? 'Webhook delivery failed after retries')]
       );
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Unexpected processing error';
