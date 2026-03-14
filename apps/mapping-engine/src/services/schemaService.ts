@@ -1,7 +1,9 @@
-import { getAIClient, getAIModel } from './aiClient';
+import { createAIClient, getAIClient, getAIModel } from './aiClient';
 import { getPool } from '@bx/database';
 import { generateId } from '@bx/shared-utils';
-import { MessageFormat, MappingRule, SchemaRegistration, SchemaDirection } from '@bx/shared-types';
+import { MessageFormat, MappingRule, PartnerLLMConfig, SchemaRegistration, SchemaDirection } from '@bx/shared-types';
+
+const PARTNER_SERVICE_URL = process.env.PARTNER_SERVICE_URL ?? 'http://localhost:3002';
 
 interface RegisterInput {
   format: MessageFormat;
@@ -31,7 +33,8 @@ export class SchemaService {
   async register(partnerId: string, input: RegisterInput): Promise<SchemaRegistration> {
     const id = generateId();
     const direction: SchemaDirection = input.direction ?? 'outbound';
-    const model = getAIModel();
+    const llmConfig = (await this.getPartnerLLMConfig(partnerId)) ?? undefined;
+    const model = llmConfig?.model ?? getAIModel();
 
     // Auto-increment version per (partner_id, direction, format, message_type)
     const { rows: versionRows } = await this.db.query<{ max: number }>(
@@ -41,7 +44,7 @@ export class SchemaService {
     const nextVersion = (versionRows[0]?.max ?? 0) + 1;
     const isActive = nextVersion === 1;
 
-    const { inferredSchema, mappingRules } = await this.inferWithAI(input.samplePayload, input.format, direction, input.sampleSchema);
+    const { inferredSchema, mappingRules } = await this.inferWithAI(input.samplePayload, input.format, direction, input.sampleSchema, llmConfig);
     const status = mappingRules.every((r) => r.confidence >= 0.85) ? 'auto_approved' : 'pending_review';
 
     const { rows } = await this.db.query<Record<string, unknown>>(
@@ -136,7 +139,8 @@ export class SchemaService {
     samplePayload: string,
     format: MessageFormat,
     direction: SchemaDirection = 'outbound',
-    sampleSchema?: string
+    sampleSchema?: string,
+    llmConfig?: PartnerLLMConfig,
   ): Promise<{ inferredSchema: Record<string, unknown>; mappingRules: MappingRule[] }> {
     const schemaSection = sampleSchema
       ? `\nSchema definition (${format.toUpperCase()} schema / XSD / JSON Schema / CSV headers — use this to understand field names and types precisely):\n${sampleSchema.slice(0, 2000)}\n`
@@ -189,8 +193,10 @@ Respond with valid JSON only:
 }`;
 
     try {
-      const completion = await getAIClient().chat.completions.create({
-        model: getAIModel(),
+      const client = llmConfig ? createAIClient(llmConfig) : getAIClient();
+      const model = llmConfig?.model ?? getAIModel();
+      const completion = await client.chat.completions.create({
+        model,
         messages: [{ role: 'user', content: prompt }],
         response_format: { type: 'json_object' },
         temperature: 0.1,
@@ -231,5 +237,16 @@ Respond with valid JSON only:
       [partnerId]
     );
     return rows.map((r) => this.mapRow(r));
+  }
+
+  private async getPartnerLLMConfig(partnerId: string): Promise<PartnerLLMConfig | null> {
+    try {
+      const res = await fetch(`${PARTNER_SERVICE_URL}/api/partners/${partnerId}/llm-config`);
+      if (!res.ok) return null;
+      const body = await res.json() as { success?: boolean; data?: PartnerLLMConfig | null };
+      return body.success ? (body.data ?? null) : null;
+    } catch {
+      return null;
+    }
   }
 }
